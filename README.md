@@ -1,6 +1,12 @@
 # HomeLedger — Shared Household Expense Management System
 
-HomeLedger is a multi-tenant web application designed for managing, allocating, and auditing shared household expenses. Built with a focus on mathematical precision, security, and ledger-based accounting, the system handles two-tier recurring expense templates (both fixed contracts and variable utility/condo bills), ad-hoc one-off costs, penny-perfect split algorithms, partial or full settlements, and audited debt forgiveness..
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=MatheusPMello_household-expense-management-system&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=MatheusPMello_household-expense-management-system)
+[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=MatheusPMello_household-expense-management-system&metric=coverage)](https://sonarcloud.io/summary/new_code?id=MatheusPMello_household-expense-management-system)
+[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=MatheusPMello_household-expense-management-system&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=MatheusPMello_household-expense-management-system)
+[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=MatheusPMello_household-expense-management-system&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=MatheusPMello_household-expense-management-system)
+[![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=MatheusPMello_household-expense-management-system&metric=vulnerabilities)](https://sonarcloud.io/summary/new_code?id=MatheusPMello_household-expense-management-system)
+
+HomeLedger is a multi-tenant web application designed for managing, allocating, and auditing shared household expenses. Built with a focus on mathematical precision, security, and ledger-based accounting, the system handles two-tier recurring expense templates (both fixed contracts and variable utility/condo bills), ad-hoc one-off costs, penny-perfect split algorithms, partial or full settlements, and audited debt forgiveness.
 
 ---
 
@@ -25,6 +31,7 @@ HomeLedger addresses these issues through strict integer-cent storage, a project
 | **Security & Auth** | Bcrypt, PyJWT, SlowAPI | High-entropy password hashing (cost factor 12), short-lived access tokens, database-persisted rotating refresh tokens, endpoint rate limiting, secure HTTP headers |
 | **Frontend** | React 18, TypeScript, Vite, Tailwind CSS | Type-safe single-page application (SPA), responsive interface, accessible components, real-time client-side preview calculations |
 | **State Management** | TanStack Query v5 (React Query) | Granular client-side caching keyed by billing cycle and household scopes, automatic cache invalidation |
+| **Quality & Security** | SonarCloud, Pytest-Cov, ESLint/TypeScript | Automated SAST (Static Application Security Testing), code smell detection, test coverage tracking, Quality Gate enforcement |
 | **Infrastructure** | Docker, Docker Compose, Nginx | Multi-stage production container builds, reverse proxy routing, automated database health checks |
 
 ---
@@ -277,10 +284,38 @@ A dedicated GitHub Actions workflow is located at [`.github/workflows/ci.yml`](.
 - **Manual Dispatch** via the GitHub Actions UI
 
 **Pipeline Stages:**
-1. **`backend-test`:** Sets up Python 3.13, applies Alembic migrations, and runs the Pytest suite with code coverage tracking.
+1. **`backend-test`:** Sets up Python 3.13, applies Alembic migrations, and runs the Pytest suite with code coverage tracking (`backend/coverage.xml`).
 2. **`frontend-check`:** Sets up Node.js 22, performs TypeScript strict type checking (`tsc --noEmit`), and executes the production Vite build.
 3. **`docker-verify`:** Builds the multi-container production Docker Compose stack (`db`, `backend`, `frontend`) to ensure deployment readiness.
-4. **`quality-gate`:** Aggregates status across all preceding jobs. If any test or build step fails, the pipeline halts immediately, preventing pull request merges or broken deployments.
+4. **`sonarcloud-scan`:** Executes SonarCloud static analysis (Python & TypeScript), imports the Pytest coverage XML report, and verifies the automated Quality Gate.
+5. **`quality-gate`:** Aggregates status across all preceding jobs. If any test, build, or security gate fails, the pipeline halts immediately, preventing pull request merges or broken deployments.
+
+---
+
+### 7.4 Code Quality & Static Analysis (SonarCloud)
+
+HomeLedger integrates **SonarCloud** in its continuous integration pipeline to ensure architectural hygiene, security compliance (OWASP Top 10), and test coverage tracking across both the Python FastAPI backend and the React TypeScript frontend.
+
+#### Configuration Structure
+- **Root Configuration:** [`sonar-project.properties`](./sonar-project.properties) configures project keys, source roots (`backend/app`, `frontend/src`), test suites (`backend/tests`), and report bindings.
+- **Automated Coverage Ingestion:** Ingests `backend/coverage.xml` generated by `pytest-cov` during the `backend-test` stage.
+- **TypeScript AST Analysis:** Scans client-side logic mapped through [`frontend/tsconfig.json`](./frontend/tsconfig.json) for code smells, type soundness, and duplicated components.
+- **Sanitized Exclusions:** Excludes third-party dependencies (`node_modules`, `venv`), compiled output (`dist`), database binaries (`*.db`), test caches, and database migration histories.
+
+#### GitHub Repository Secrets Setup
+To link your repository to SonarCloud:
+1. Log in to [SonarCloud](https://sonarcloud.io) using your GitHub account and import your repository.
+2. In SonarCloud, disable **Automatic Analysis** under **Project Settings > Analysis Method** and select **With GitHub Actions**.
+3. Generate an access token in SonarCloud (**My Account > Security > Generate Token**).
+4. Add the token to GitHub under **Settings > Secrets and variables > Actions** as `SONAR_TOKEN`.
+
+#### Enforced Quality Gate Criteria
+Commits and Pull Requests must satisfy the following Quality Gate conditions:
+- **Test Coverage:** $\ge 80\%$ on newly introduced code.
+- **Security Rating:** Grade **A** (0 open vulnerabilities or security hotspots).
+- **Reliability Rating:** Grade **A** (0 unresolved bugs).
+- **Maintainability Rating:** Grade **A** (technical debt ratio $< 5\%$).
+- **Duplicated Code:** $< 3\%$ duplication across all source files.
 
 ---
 
