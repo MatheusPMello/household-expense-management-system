@@ -3,7 +3,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
 import {
-  BillingCycle,
   Expense,
   Person,
   SplitType,
@@ -17,6 +16,7 @@ import {
 } from '../../services/formatters';
 import { StatusBadge } from '../../components/shared/StatusBadge';
 import { Modal } from '../../components/ui/Modal';
+import { useHouseholdCycles } from '../../hooks/useHouseholdCycles';
 import {
   Plus,
   Receipt,
@@ -78,20 +78,10 @@ export const ExpensesPage: React.FC = () => {
   const [formError, setFormError] = useState('');
 
   // 1. Fetch cycles
-  const { data: cycles = [] } = useQuery<BillingCycle[]>({
-    queryKey: ['cycles', activeHousehold?.household_id],
-    queryFn: async () => {
-      if (!activeHousehold) return [];
-      const res = await api.get<BillingCycle[]>(
-        `/cycles?household_id=${activeHousehold.household_id}`
-      );
-      return res.data;
-    },
-    enabled: !!activeHousehold,
-  });
-
-  const activeCycle =
-    cycles.find((c) => c.id === selectedCycleId) || cycles[0] || null;
+  const { cycles, activeCycle } = useHouseholdCycles(
+    activeHousehold?.household_id,
+    selectedCycleId
+  );
 
   // 2. Fetch persons in household
   const { data: persons = [] } = useQuery<Person[]>({

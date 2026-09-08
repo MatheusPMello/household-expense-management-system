@@ -296,13 +296,12 @@ async def list_waivers(
     ]
 
 
-@router.patch("/waivers/{waiver_id}", response_model=DebtWaiverOut)
-async def update_debt_waiver(
+async def _get_waiver_and_authorize_admin(
     waiver_id: uuid.UUID,
-    data: DebtWaiverUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
+    user_id: uuid.UUID,
+    db: AsyncSession,
+    action: str,
+) -> DebtWaiver:
     stmt = select(DebtWaiver).where(DebtWaiver.id == waiver_id)
     waiver = (await db.execute(stmt)).scalar_one_or_none()
     if not waiver:
@@ -311,15 +310,28 @@ async def update_debt_waiver(
         )
 
     cycle, membership = await get_cycle_and_member(
-        waiver.billing_cycle_id, current_user.id, db
+        waiver.billing_cycle_id, user_id, db
     )
     verify_cycle_is_open(cycle)
 
     if membership.role != "ADMIN":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only administrators can edit debt waiver records.",
+            detail=f"Only administrators can {action} debt waiver records.",
         )
+    return waiver
+
+
+@router.patch("/waivers/{waiver_id}", response_model=DebtWaiverOut)
+async def update_debt_waiver(
+    waiver_id: uuid.UUID,
+    data: DebtWaiverUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    waiver = await _get_waiver_and_authorize_admin(
+        waiver_id, current_user.id, db, "edit"
+    )
 
     person_stmt = select(Person).where(Person.id == waiver.person_id)
     person = (await db.execute(person_stmt)).scalar_one_or_none()
@@ -350,23 +362,9 @@ async def delete_debt_waiver(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    stmt = select(DebtWaiver).where(DebtWaiver.id == waiver_id)
-    waiver = (await db.execute(stmt)).scalar_one_or_none()
-    if not waiver:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Debt waiver record not found."
-        )
-
-    cycle, membership = await get_cycle_and_member(
-        waiver.billing_cycle_id, current_user.id, db
+    waiver = await _get_waiver_and_authorize_admin(
+        waiver_id, current_user.id, db, "delete"
     )
-    verify_cycle_is_open(cycle)
-
-    if membership.role != "ADMIN":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only administrators can delete debt waiver records.",
-        )
 
     await db.delete(waiver)
     await db.commit()

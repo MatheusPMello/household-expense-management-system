@@ -122,7 +122,9 @@ async def _handle_person_role_update(
     target_mem.role = new_role
 
 
-async def _build_person_out(person: Person, db: AsyncSession) -> PersonOut:
+async def _get_person_user_email_and_role(
+    person: Person, db: AsyncSession
+) -> tuple[Optional[str], Optional[str]]:
     user_email: Optional[str] = None
     role: Optional[str] = None
     if person.user_id:
@@ -137,7 +139,37 @@ async def _build_person_out(person: Person, db: AsyncSession) -> PersonOut:
         m = (await db.execute(mem_stmt)).scalar_one_or_none()
         if m:
             role = m.role
+    return user_email, role
 
+
+async def _get_person_and_require_admin(
+    person_id: uuid.UUID,
+    current_user_id: uuid.UUID,
+    db: AsyncSession,
+    action_desc: str,
+) -> Person:
+    stmt = select(Person).where(Person.id == person_id)
+    person = (await db.execute(stmt)).scalar_one_or_none()
+    if not person:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=PERSON_NOT_FOUND
+        )
+
+    check_stmt = select(HouseholdMember).where(
+        HouseholdMember.household_id == person.household_id,
+        HouseholdMember.user_id == current_user_id,
+        HouseholdMember.role == "ADMIN",
+    )
+    if not (await db.execute(check_stmt)).scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Only household administrators can {action_desc}.",
+        )
+    return person
+
+
+async def _build_person_out(person: Person, db: AsyncSession) -> PersonOut:
+    user_email, role = await _get_person_user_email_and_role(person, db)
     return PersonOut(
         id=person.id,
         household_id=person.household_id,
@@ -159,24 +191,9 @@ async def update_person(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    stmt = select(Person).where(Person.id == person_id)
-    person = (await db.execute(stmt)).scalar_one_or_none()
-    if not person:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=PERSON_NOT_FOUND
-        )
-
-    # Only household ADMIN can update resident details
-    check_stmt = select(HouseholdMember).where(
-        HouseholdMember.household_id == person.household_id,
-        HouseholdMember.user_id == current_user.id,
-        HouseholdMember.role == "ADMIN",
+    person = await _get_person_and_require_admin(
+        person_id, current_user.id, db, "update resident details"
     )
-    if not (await db.execute(check_stmt)).scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only household administrators can update resident details.",
-        )
 
     if person.is_deleted:
         raise HTTPException(
@@ -203,24 +220,9 @@ async def delete_person(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    stmt = select(Person).where(Person.id == person_id)
-    person = (await db.execute(stmt)).scalar_one_or_none()
-    if not person:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=PERSON_NOT_FOUND
-        )
-
-    # Only household ADMIN can delete residents
-    check_stmt = select(HouseholdMember).where(
-        HouseholdMember.household_id == person.household_id,
-        HouseholdMember.user_id == current_user.id,
-        HouseholdMember.role == "ADMIN",
+    person = await _get_person_and_require_admin(
+        person_id, current_user.id, db, "delete residents"
     )
-    if not (await db.execute(check_stmt)).scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only household administrators can delete residents.",
-        )
 
     if person.is_deleted:
         raise HTTPException(
@@ -270,24 +272,9 @@ async def restore_person(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    stmt = select(Person).where(Person.id == person_id)
-    person = (await db.execute(stmt)).scalar_one_or_none()
-    if not person:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=PERSON_NOT_FOUND
-        )
-
-    # Only household ADMIN can restore residents
-    check_stmt = select(HouseholdMember).where(
-        HouseholdMember.household_id == person.household_id,
-        HouseholdMember.user_id == current_user.id,
-        HouseholdMember.role == "ADMIN",
+    person = await _get_person_and_require_admin(
+        person_id, current_user.id, db, "restore residents"
     )
-    if not (await db.execute(check_stmt)).scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only household administrators can restore residents.",
-        )
 
     if not person.is_deleted:
         raise HTTPException(
@@ -359,20 +346,7 @@ async def get_person_history(
     waivers = (await db.execute(waivers_stmt)).scalars().all()
     waivers_out, total_waived = _build_waiver_history_items(waivers)
 
-    user_email: Optional[str] = None
-    role: Optional[str] = None
-    if person.user_id:
-        user_stmt = select(User).where(User.id == person.user_id)
-        u = (await db.execute(user_stmt)).scalar_one_or_none()
-        if u:
-            user_email = u.email
-        mem_stmt = select(HouseholdMember).where(
-            HouseholdMember.household_id == person.household_id,
-            HouseholdMember.user_id == person.user_id,
-        )
-        m = (await db.execute(mem_stmt)).scalar_one_or_none()
-        if m:
-            role = m.role
+    user_email, role = await _get_person_user_email_and_role(person, db)
 
     return PersonHistoryOut(
         person_id=person.id,
@@ -403,24 +377,9 @@ async def link_user_to_person(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    stmt = select(Person).where(Person.id == person_id)
-    person = (await db.execute(stmt)).scalar_one_or_none()
-    if not person:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=PERSON_NOT_FOUND
-        )
-
-    # Only household ADMIN can link user accounts
-    admin_check = select(HouseholdMember).where(
-        HouseholdMember.household_id == person.household_id,
-        HouseholdMember.user_id == current_user.id,
-        HouseholdMember.role == "ADMIN",
+    person = await _get_person_and_require_admin(
+        person_id, current_user.id, db, "link user accounts"
     )
-    if not (await db.execute(admin_check)).scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only household administrators can link user accounts.",
-        )
 
     # Find user by email
     user_stmt = select(User).where(User.email == data.email.lower().strip())
@@ -472,24 +431,9 @@ async def unlink_user_from_person(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    stmt = select(Person).where(Person.id == person_id)
-    person = (await db.execute(stmt)).scalar_one_or_none()
-    if not person:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=PERSON_NOT_FOUND
-        )
-
-    # Only household ADMIN can unlink user accounts
-    admin_check = select(HouseholdMember).where(
-        HouseholdMember.household_id == person.household_id,
-        HouseholdMember.user_id == current_user.id,
-        HouseholdMember.role == "ADMIN",
+    person = await _get_person_and_require_admin(
+        person_id, current_user.id, db, "unlink user accounts"
     )
-    if not (await db.execute(admin_check)).scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only household administrators can unlink user accounts.",
-        )
 
     person.user_id = None
     await db.commit()

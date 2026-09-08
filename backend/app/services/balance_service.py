@@ -19,45 +19,6 @@ from app.schemas.report import (
 from app.schemas.expense import ExpenseOut, ExpenseSplitOut
 
 
-async def calculate_cycle_report(
-    db: AsyncSession, cycle_id: uuid.UUID
-) -> CurrentCycleReport:
-    # 1. Load cycle with household
-    cycle_stmt = select(BillingCycle).where(BillingCycle.id == cycle_id)
-    cycle = (await db.execute(cycle_stmt)).scalar_one_or_none()
-    if not cycle:
-        raise ValueError("Billing cycle not found.")
-
-    # 2. Load all persons in household (both active and inactive who might have splits)
-    persons_stmt = select(Person).where(Person.household_id == cycle.household_id)
-    persons = (await db.execute(persons_stmt)).scalars().all()
-    person_map: Dict[uuid.UUID, Person] = {p.id: p for p in persons}
-
-    # 3. Load expenses with splits for this cycle
-    exp_stmt = (
-        select(Expense)
-        .where(Expense.billing_cycle_id == cycle_id)
-        .options(selectinload(Expense.splits))
-        .order_by(Expense.due_date, Expense.created_at)
-    )
-    expenses = (await db.execute(exp_stmt)).scalars().all()
-
-    # 4. Load payments for this cycle
-    pay_stmt = select(Payment).where(Payment.billing_cycle_id == cycle_id)
-    payments = (await db.execute(pay_stmt)).scalars().all()
-
-    # 5. Load waivers for this cycle
-    waiver_stmt = select(DebtWaiver).where(DebtWaiver.billing_cycle_id == cycle_id)
-    waivers = (await db.execute(waiver_stmt)).scalars().all()
-
-    # Aggregations
-    total_budget_cents = sum(e.total_amount_cents for e in expenses)
-    total_paid_cents = sum(
-        e.total_amount_cents for e in expenses if e.is_paid
-    )
-    total_collected_cents = sum(p.amount_cents for p in payments)
-    total_waived_cents = sum(w.amount_cents for w in waivers)
-
 def _compute_resident_balances(
     persons: List[Person],
     expenses: List[Expense],
