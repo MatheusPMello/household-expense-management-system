@@ -10,10 +10,12 @@ from app.models.household import HouseholdMember
 from app.models.cycle import BillingCycle
 from app.models.person import Person
 from app.models.expense import Expense, ExpenseSplit
+from app.models.fixed_template import FixedExpenseTemplate
 from app.schemas.expense import (
     ExpenseCreate,
     ExpenseUpdate,
-    ExpenseVendorStatusUpdate,
+    ExpensePaymentStatusUpdate,
+    ExpenseSetAmount,
     ExpenseOut,
     ExpenseSplitOut,
 )
@@ -59,13 +61,15 @@ def format_expense_out(expense: Expense, person_map: Dict[uuid.UUID, str]) -> Ex
     return ExpenseOut(
         id=expense.id,
         billing_cycle_id=expense.billing_cycle_id,
+        template_id=expense.template_id,
         title=expense.title,
         total_amount_cents=expense.total_amount_cents,
         is_fixed=expense.is_fixed,
         category=expense.category,
         due_date=expense.due_date,
-        paid_to_vendor=expense.paid_to_vendor,
+        is_paid=expense.is_paid,
         split_type=expense.split_type,
+        status=expense.status,
         created_at=expense.created_at,
         splits=splits_out,
     )
@@ -110,31 +114,69 @@ async def create_expense(
 
     person_name_map = {p.id: p.name for p in household_persons}
 
-    # Execute split calculation
-    try:
-        calculated_splits = calculate_splits(
-            total_amount_cents=data.total_amount_cents,
+    template_id = data.template_id
+    is_fixed = data.is_fixed
+    target_status = data.status or "READY"
+
+    # If recurring option is chosen and no template_id provided, create the template
+    if data.recurrence_type in ("FIXED", "VARIABLE") and not template_id:
+        tpl_split_config: Dict = {}
+        if data.participant_ids:
+            tpl_split_config["participant_ids"] = [str(pid) for pid in data.participant_ids]
+        if data.percentages:
+            tpl_split_config["percentages"] = {str(k): v for k, v in data.percentages.items()}
+        if data.weights:
+            tpl_split_config["weights"] = {str(k): v for k, v in data.weights.items()}
+
+        tpl = FixedExpenseTemplate(
+            household_id=cycle.household_id,
+            title=data.title.strip(),
+            recurrence_type=data.recurrence_type,
+            estimated_amount_cents=data.total_amount_cents if data.total_amount_cents > 0 else None,
+            due_day=data.due_day or data.due_date.day,
+            category=data.category.strip(),
+            is_active=True,
             split_type=data.split_type,
-            participant_ids=data.participant_ids,
-            percentages=data.percentages,
-            exact_amounts=data.exact_amounts,
-            weights=data.weights,
+            split_config=tpl_split_config if tpl_split_config else None,
         )
-    except SplitEngineError as e:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(e),
-        )
+        db.add(tpl)
+        await db.flush()
+        template_id = tpl.id
+        is_fixed = data.recurrence_type == "FIXED"
+        if data.recurrence_type == "VARIABLE" and data.total_amount_cents == 0:
+            target_status = "PENDING_VALUE"
+
+    # Handle PENDING_VALUE vs READY splits calculation
+    calculated_splits = []
+    if data.total_amount_cents > 0:
+        try:
+            calculated_splits = calculate_splits(
+                total_amount_cents=data.total_amount_cents,
+                split_type=data.split_type,
+                participant_ids=data.participant_ids,
+                percentages=data.percentages,
+                exact_amounts=data.exact_amounts,
+                weights=data.weights,
+            )
+        except SplitEngineError as e:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(e),
+            )
+    else:
+        target_status = "PENDING_VALUE"
 
     expense = Expense(
         billing_cycle_id=cycle.id,
+        template_id=template_id,
         title=data.title.strip(),
         total_amount_cents=data.total_amount_cents,
-        is_fixed=data.is_fixed,
+        is_fixed=is_fixed,
         category=data.category.strip(),
         due_date=data.due_date,
-        paid_to_vendor=False,
+        is_paid=False,
         split_type=data.split_type,
+        status=target_status,
     )
     db.add(expense)
     await db.flush()
@@ -293,6 +335,8 @@ async def update_expense(
     expense.category = new_category
     expense.due_date = new_due_date
     expense.split_type = new_split_type
+    if data.status is not None:
+        expense.status = data.status
 
     await db.commit()
 
@@ -312,10 +356,116 @@ async def update_expense(
     return format_expense_out(expense_loaded, person_map)
 
 
-@router.patch("/{expense_id}/vendor-status", response_model=ExpenseOut)
-async def update_vendor_status(
+@router.patch("/{expense_id}/amount", response_model=ExpenseOut)
+async def set_expense_amount(
     expense_id: uuid.UUID,
-    data: ExpenseVendorStatusUpdate,
+    data: ExpenseSetAmount,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    stmt = (
+        select(Expense)
+        .where(Expense.id == expense_id)
+        .options(selectinload(Expense.splits), selectinload(Expense.template))
+    )
+    expense = (await db.execute(stmt)).scalar_one_or_none()
+    if not expense:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Expense not found."
+        )
+
+    cycle = await get_cycle_and_verify_access(
+        expense.billing_cycle_id, current_user.id, db
+    )
+    verify_cycle_is_open(cycle)
+
+    # If linked to a template and user requested updating the template baseline
+    if expense.template_id and data.update_template_default:
+        tpl_stmt = select(FixedExpenseTemplate).where(
+            FixedExpenseTemplate.id == expense.template_id
+        )
+        tpl = (await db.execute(tpl_stmt)).scalar_one_or_none()
+        if tpl:
+            tpl.estimated_amount_cents = data.actual_amount_cents
+
+    # Determine split rules
+    participant_ids: Optional[List[uuid.UUID]] = None
+    percentages: Optional[Dict[uuid.UUID, float]] = None
+    weights: Optional[Dict[uuid.UUID, float]] = None
+    exact_amounts: Optional[Dict[uuid.UUID, int]] = None
+    split_type = expense.split_type
+
+    # 1. If template exists, prefer template rules
+    if expense.template:
+        split_type = expense.template.split_type or split_type
+        cfg = expense.template.split_config or {}
+        raw_pids = cfg.get("participant_ids")
+        if raw_pids:
+            participant_ids = [uuid.UUID(str(pid)) for pid in raw_pids]
+        if cfg.get("percentages"):
+            percentages = {
+                uuid.UUID(str(k)): float(v) for k, v in cfg["percentages"].items()
+            }
+        if cfg.get("weights"):
+            weights = {
+                uuid.UUID(str(k)): float(v) for k, v in cfg["weights"].items()
+            }
+
+    # 2. If no participant_ids yet, check existing splits
+    if not participant_ids and expense.splits:
+        participant_ids = [s.person_id for s in expense.splits]
+
+    # 3. Fallback: all active household persons
+    if not participant_ids and not percentages and not weights:
+        p_stmt = select(Person).where(
+            Person.household_id == cycle.household_id,
+            Person.is_active == True,
+            Person.is_deleted == False,
+        )
+        active_persons = (await db.execute(p_stmt)).scalars().all()
+        participant_ids = [p.id for p in active_persons]
+
+    try:
+        calculated_splits = calculate_splits(
+            total_amount_cents=data.actual_amount_cents,
+            split_type=split_type,
+            participant_ids=participant_ids,
+            percentages=percentages,
+            exact_amounts=exact_amounts,
+            weights=weights,
+        )
+    except SplitEngineError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        )
+
+    # Clear existing splits and assign newly calculated splits using cascade
+    expense.splits.clear()
+    for s in calculated_splits:
+        new_split = ExpenseSplit(
+            person_id=s.person_id,
+            assigned_amount_cents=s.assigned_amount_cents,
+        )
+        expense.splits.append(new_split)
+
+    expense.total_amount_cents = data.actual_amount_cents
+    expense.status = "READY"
+    expense.split_type = split_type
+
+    await db.commit()
+    await db.refresh(expense, attribute_names=["splits"])
+
+    p_stmt = select(Person).where(Person.household_id == cycle.household_id)
+    persons = (await db.execute(p_stmt)).scalars().all()
+    person_map = {p.id: p.name for p in persons}
+
+    return format_expense_out(expense, person_map)
+
+
+@router.patch("/{expense_id}/payment-status", response_model=ExpenseOut)
+async def update_payment_status(
+    expense_id: uuid.UUID,
+    data: ExpensePaymentStatusUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -334,7 +484,7 @@ async def update_vendor_status(
         expense.billing_cycle_id, current_user.id, db
     )
 
-    expense.paid_to_vendor = data.paid_to_vendor
+    expense.is_paid = data.is_paid
     await db.commit()
     await db.refresh(expense)
 

@@ -8,6 +8,11 @@ if [ ! -d "backend/venv" ] || [ ! -d "frontend/node_modules" ]; then
 fi
 
 echo -e "\n\033[1;32m=== [HomeLedger] Starting Development Servers ===\033[0m"
+echo -e "\033[1;36mChecking and applying database migrations...\033[0m"
+cd backend
+./venv/bin/alembic upgrade head
+cd ..
+
 echo -e "\033[1;36mBackend API:    http://localhost:8000\033[0m"
 echo -e "\033[1;36mAPI Swagger:    http://localhost:8000/docs\033[0m"
 echo -e "\033[1;36mFrontend App:   http://localhost:5173\033[0m"

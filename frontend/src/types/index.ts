@@ -42,18 +42,82 @@ export interface Person {
   role?: MemberRole | null;
   name: string;
   is_active: boolean;
+  is_deleted: boolean;
+  deleted_at?: string | null;
   created_at: string;
 }
+
+export interface PersonSplitHistoryItem {
+  expense_id: string;
+  billing_cycle_id: string;
+  cycle_year: number;
+  cycle_month: number;
+  expense_title: string;
+  category: string;
+  due_date: string;
+  assigned_amount_cents: number;
+  is_paid: boolean;
+}
+
+export interface PersonPaymentHistoryItem {
+  id: string;
+  billing_cycle_id: string;
+  cycle_year: number;
+  cycle_month: number;
+  amount_cents: number;
+  paid_at: string;
+  notes?: string | null;
+  proof_url?: string | null;
+}
+
+export interface PersonWaiverHistoryItem {
+  id: string;
+  billing_cycle_id: string;
+  cycle_year: number;
+  cycle_month: number;
+  amount_cents: number;
+  waived_at: string;
+  reason: string;
+}
+
+export interface PersonHistory {
+  person_id: string;
+  household_id: string;
+  name: string;
+  person_name: string;
+  user_id?: string | null;
+  user_email?: string | null;
+  role?: MemberRole | null;
+  is_active: boolean;
+  is_deleted: boolean;
+  deleted_at?: string | null;
+  created_at: string;
+  total_assigned_cents: number;
+  total_paid_cents: number;
+  total_waived_cents: number;
+  outstanding_balance_cents: number;
+  splits: PersonSplitHistoryItem[];
+  payments: PersonPaymentHistoryItem[];
+  debt_waivers: PersonWaiverHistoryItem[];
+}
+
+export type RecurrenceOption = 'ONE_OFF' | 'FIXED' | 'VARIABLE';
+export type ExpenseStatus = 'PENDING_VALUE' | 'READY' | 'SETTLED';
 
 export interface FixedExpenseTemplate {
   id: string;
   household_id: string;
   title: string;
-  estimated_amount_cents: number;
+  recurrence_type?: 'FIXED' | 'VARIABLE';
+  estimated_amount_cents?: number | null;
   due_day: number;
   category: string;
   is_active: boolean;
+  split_type?: SplitType;
+  split_config?: Record<string, any> | null;
 }
+
+export type RecurringExpenseTemplate = FixedExpenseTemplate;
 
 export interface BillingCycle {
   id: string;
@@ -64,7 +128,7 @@ export interface BillingCycle {
   closed_at?: string | null;
   created_at: string;
   total_expenses_cents: number;
-  total_paid_to_vendor_cents: number;
+  total_paid_cents: number;
   total_collected_cents: number;
   total_waived_cents: number;
 }
@@ -80,13 +144,15 @@ export interface ExpenseSplit {
 export interface Expense {
   id: string;
   billing_cycle_id: string;
+  template_id?: string | null;
   title: string;
   total_amount_cents: number;
   is_fixed: boolean;
   category: string;
   due_date: string;
-  paid_to_vendor: boolean;
+  is_paid: boolean;
   split_type: SplitType;
+  status: ExpenseStatus;
   created_at: string;
   splits: ExpenseSplit[];
 }
@@ -112,6 +178,17 @@ export interface DebtWaiver {
   reason: string;
 }
 
+export interface PaymentUpdate {
+  amount_cents?: number;
+  notes?: string | null;
+  proof_url?: string | null;
+}
+
+export interface DebtWaiverUpdate {
+  amount_cents?: number;
+  reason?: string;
+}
+
 export interface ResidentCycleBalance {
   person_id: string;
   person_name: string;
@@ -128,7 +205,7 @@ export interface CurrentCycleReport {
   month: number;
   status: CycleStatus;
   total_budget_cents: number;
-  total_paid_to_vendor_cents: number;
+  total_paid_cents: number;
   total_collected_cents: number;
   total_waived_cents: number;
   residents: ResidentCycleBalance[];

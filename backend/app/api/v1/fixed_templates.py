@@ -71,10 +71,13 @@ async def create_fixed_template(
     tpl = FixedExpenseTemplate(
         household_id=household_id,
         title=data.title.strip(),
+        recurrence_type=data.recurrence_type,
         estimated_amount_cents=data.estimated_amount_cents,
         due_day=data.due_day,
         category=data.category.strip(),
         is_active=data.is_active,
+        split_type=data.split_type,
+        split_config=data.split_config,
     )
     db.add(tpl)
     await db.commit()
@@ -101,6 +104,8 @@ async def update_fixed_template(
 
     if data.title is not None:
         tpl.title = data.title.strip()
+    if data.recurrence_type is not None:
+        tpl.recurrence_type = data.recurrence_type
     if data.estimated_amount_cents is not None:
         tpl.estimated_amount_cents = data.estimated_amount_cents
     if data.due_day is not None:
@@ -109,6 +114,10 @@ async def update_fixed_template(
         tpl.category = data.category.strip()
     if data.is_active is not None:
         tpl.is_active = data.is_active
+    if data.split_type is not None:
+        tpl.split_type = data.split_type
+    if data.split_config is not None:
+        tpl.split_config = data.split_config
 
     await db.commit()
     await db.refresh(tpl)

@@ -42,3 +42,15 @@ class DebtWaiverOut(BaseModel):
     reason: str
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class PaymentUpdate(BaseModel):
+    amount_cents: Optional[int] = Field(default=None, gt=0)
+    notes: Optional[str] = None
+    proof_url: Optional[str] = None
+
+
+class DebtWaiverUpdate(BaseModel):
+    amount_cents: Optional[int] = Field(default=None, gt=0)
+    reason: Optional[str] = Field(default=None, min_length=3)
+

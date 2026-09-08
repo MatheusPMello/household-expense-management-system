@@ -1,6 +1,6 @@
 import uuid
 from datetime import date, datetime
-from typing import List, TYPE_CHECKING
+from typing import List, Optional, TYPE_CHECKING
 from sqlalchemy import (
     String,
     Integer,
@@ -20,17 +20,27 @@ from app.core.database import Base
 if TYPE_CHECKING:
     from app.models.cycle import BillingCycle
     from app.models.person import Person
+    from app.models.fixed_template import FixedExpenseTemplate
 
 
 class Expense(Base):
     __tablename__ = "expenses"
     __table_args__ = (
-        CheckConstraint("total_amount_cents > 0", name="check_expense_amount_positive"),
+        CheckConstraint("total_amount_cents >= 0", name="check_expense_amount_non_negative"),
+        CheckConstraint(
+            "total_amount_cents > 0 OR status = 'PENDING_VALUE'",
+            name="check_expense_amount_positive_or_pending",
+        ),
         CheckConstraint(
             "split_type IN ('EQUAL', 'PERCENTAGE', 'EXACT', 'WEIGHTED')",
             name="check_expense_split_type_valid",
         ),
+        CheckConstraint(
+            "status IN ('PENDING_VALUE', 'READY', 'SETTLED')",
+            name="check_expense_status_valid",
+        ),
         Index("idx_expenses_cycle", "billing_cycle_id"),
+        Index("idx_expenses_template", "template_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -42,19 +52,29 @@ class Expense(Base):
         nullable=False,
         index=True,
     )
+    template_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("fixed_expense_templates.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     title: Mapped[str] = mapped_column(String(150), nullable=False)
-    total_amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_amount_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_fixed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     category: Mapped[str] = mapped_column(String(50), nullable=False)
     due_date: Mapped[date] = mapped_column(Date, nullable=False)
-    paid_to_vendor: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_paid: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     split_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="READY", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     billing_cycle: Mapped["BillingCycle"] = relationship(
         "BillingCycle", back_populates="expenses"
+    )
+    template: Mapped[Optional["FixedExpenseTemplate"]] = relationship(
+        "FixedExpenseTemplate", back_populates="expenses"
     )
     splits: Mapped[List["ExpenseSplit"]] = relationship(
         "ExpenseSplit", back_populates="expense", cascade="all, delete-orphan"

@@ -130,7 +130,7 @@ async def test_balance_service_direct_calculation(db_session: AsyncSession):
         is_fixed=True,
         category="Utilities",
         due_date=date(2026, 10, 15),
-        paid_to_vendor=True,
+        is_paid=True,
         split_type="EQUAL",
     )
     db_session.add(exp)
@@ -161,7 +161,7 @@ async def test_balance_service_direct_calculation(db_session: AsyncSession):
     # Calculate cycle report
     report = await calculate_cycle_report(db_session, cycle.id)
     assert report.total_budget_cents == 10000
-    assert report.total_paid_to_vendor_cents == 10000
+    assert report.total_paid_cents == 10000
     assert report.total_collected_cents == 9000
     assert report.total_waived_cents == 2000
 

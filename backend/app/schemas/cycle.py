@@ -19,7 +19,7 @@ class BillingCycleOut(BaseModel):
     closed_at: Optional[datetime] = None
     created_at: datetime
     total_expenses_cents: int = 0
-    total_paid_to_vendor_cents: int = 0
+    total_paid_cents: int = 0
     total_collected_cents: int = 0
     total_waived_cents: int = 0
 

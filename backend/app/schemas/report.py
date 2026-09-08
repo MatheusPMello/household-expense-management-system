@@ -21,7 +21,7 @@ class CurrentCycleReport(BaseModel):
     month: int
     status: str
     total_budget_cents: int
-    total_paid_to_vendor_cents: int
+    total_paid_cents: int
     total_collected_cents: int
     total_waived_cents: int
     residents: List[ResidentCycleBalance]

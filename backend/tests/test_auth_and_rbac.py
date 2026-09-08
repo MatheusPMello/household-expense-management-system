@@ -322,3 +322,206 @@ async def test_add_household_member_duplicate_person_names(client: AsyncClient):
     assert add_mem.json()["email"] == "sam@example.com"
 
 
+@pytest.mark.asyncio
+async def test_person_edit_delete_restore_and_history(client: AsyncClient):
+    # 1. Register Admin
+    reg_admin = await client.post(
+        "/api/v1/auth/register",
+        json={"email": "superadmin@example.com", "password": "Password123!", "full_name": "Super Admin"},
+    )
+    token_admin = (
+        await client.post(
+            "/api/v1/auth/login",
+            json={"email": "superadmin@example.com", "password": "Password123!"},
+        )
+    ).json()["access_token"]
+    household_id = reg_admin.json()["households"][0]["household_id"]
+
+    # 2. Register a standard Member user
+    await client.post(
+        "/api/v1/auth/register",
+        json={"email": "roomie@example.com", "password": "Password123!", "full_name": "Roomie User"},
+    )
+    token_member = (
+        await client.post(
+            "/api/v1/auth/login",
+            json={"email": "roomie@example.com", "password": "Password123!"},
+        )
+    ).json()["access_token"]
+
+    # Admin adds Roomie to household
+    await client.post(
+        f"/api/v1/households/{household_id}/members",
+        headers={"Authorization": f"Bearer {token_admin}"},
+        json={"email": "roomie@example.com", "role": "MEMBER"},
+    )
+
+    # List persons in household
+    persons_resp = await client.get(
+        f"/api/v1/households/{household_id}/persons",
+        headers={"Authorization": f"Bearer {token_admin}"},
+    )
+    persons = persons_resp.json()
+    admin_person = next(p for p in persons if p["name"] == "Super Admin")
+    roomie_person = next(p for p in persons if p["name"] == "Roomie User")
+
+    # 3. Test edit resident
+    # Member cannot update resident
+    forbidden_edit = await client.put(
+        f"/api/v1/persons/{roomie_person['id']}",
+        headers={"Authorization": f"Bearer {token_member}"},
+        json={"name": "Hacker Name"},
+    )
+    assert forbidden_edit.status_code == 403
+
+    # Admin updates Roomie's name and role to ADMIN
+    edit_resp = await client.put(
+        f"/api/v1/persons/{roomie_person['id']}",
+        headers={"Authorization": f"Bearer {token_admin}"},
+        json={"name": "Roomie Promoted", "role": "ADMIN"},
+    )
+    assert edit_resp.status_code == 200
+    assert edit_resp.json()["name"] == "Roomie Promoted"
+    assert edit_resp.json()["role"] == "ADMIN"
+
+    # Demote roomie back to MEMBER
+    await client.put(
+        f"/api/v1/persons/{roomie_person['id']}",
+        headers={"Authorization": f"Bearer {token_admin}"},
+        json={"role": "MEMBER"},
+    )
+
+    # 4. Attempt to self-delete admin resident -> 400
+    self_del = await client.delete(
+        f"/api/v1/persons/{admin_person['id']}",
+        headers={"Authorization": f"Bearer {token_admin}"},
+    )
+    assert self_del.status_code == 400
+    assert "own resident profile" in self_del.json()["detail"]
+
+    # 5. Member attempts to delete Roomie -> 403 Forbidden
+    mem_del = await client.delete(
+        f"/api/v1/persons/{roomie_person['id']}",
+        headers={"Authorization": f"Bearer {token_member}"},
+    )
+    assert mem_del.status_code == 403
+
+    # 6. Create a cycle and expense with splits to establish financial history
+    cycle_resp = await client.post(
+        "/api/v1/cycles",
+        headers={"Authorization": f"Bearer {token_admin}"},
+        json={"household_id": household_id, "year": 2026, "month": 9},
+    )
+    assert cycle_resp.status_code == 201
+    cycle_id = cycle_resp.json()["id"]
+
+    # Add expense split with roomie
+    exp_resp = await client.post(
+        "/api/v1/expenses",
+        headers={"Authorization": f"Bearer {token_admin}"},
+        json={
+            "billing_cycle_id": cycle_id,
+            "title": "Groceries",
+            "category": "Food",
+            "total_amount_cents": 10000,
+            "due_date": "2026-09-15",
+            "split_type": "EQUAL",
+            "participant_ids": [admin_person["id"], roomie_person["id"]],
+        },
+    )
+    assert exp_resp.status_code == 201
+
+    # Record a payment for roomie
+    pay_resp = await client.post(
+        "/api/v1/settlements/payments",
+        headers={"Authorization": f"Bearer {token_admin}"},
+        json={
+            "billing_cycle_id": cycle_id,
+            "person_id": roomie_person["id"],
+            "amount_cents": 3000,
+            "notes": "Partial grocery share",
+        },
+    )
+    assert pay_resp.status_code == 201
+
+    # Record a debt waiver for roomie
+    waiver_resp = await client.post(
+        "/api/v1/settlements/waivers",
+        headers={"Authorization": f"Bearer {token_admin}"},
+        json={
+            "billing_cycle_id": cycle_id,
+            "person_id": roomie_person["id"],
+            "amount_cents": 2000,
+            "reason": "Cleaned the apartment to offset debt",
+        },
+    )
+    assert waiver_resp.status_code == 201
+
+    # 7. Admin deletes Roomie -> soft delete
+    del_resp = await client.delete(
+        f"/api/v1/persons/{roomie_person['id']}",
+        headers={"Authorization": f"Bearer {token_admin}"},
+    )
+    assert del_resp.status_code == 200
+    assert del_resp.json()["is_deleted"] is True
+    assert del_resp.json()["is_active"] is False
+    assert del_resp.json()["deleted_at"] is not None
+
+    # 8. Query persons: default excludes deleted, include_deleted=true includes
+    active_only = await client.get(
+        f"/api/v1/households/{household_id}/persons",
+        headers={"Authorization": f"Bearer {token_admin}"},
+    )
+    assert all(p["id"] != roomie_person["id"] for p in active_only.json())
+
+    all_persons = await client.get(
+        f"/api/v1/households/{household_id}/persons?include_deleted=true",
+        headers={"Authorization": f"Bearer {token_admin}"},
+    )
+    deleted_p = next(p for p in all_persons.json() if p["id"] == roomie_person["id"])
+    assert deleted_p["is_deleted"] is True
+
+    # 9. Verify history endpoint for deleted resident
+    hist_resp = await client.get(
+        f"/api/v1/persons/{roomie_person['id']}/history",
+        headers={"Authorization": f"Bearer {token_admin}"},
+    )
+    assert hist_resp.status_code == 200
+    hist = hist_resp.json()
+    assert hist["person_name"] == "Roomie Promoted"
+    assert hist["is_deleted"] is True
+    assert hist["total_assigned_cents"] == 5000
+    assert hist["total_paid_cents"] == 3000
+    assert hist["total_waived_cents"] == 2000
+    assert hist["outstanding_balance_cents"] == 0
+    assert len(hist["splits"]) == 1
+    assert hist["splits"][0]["expense_title"] == "Groceries"
+    assert len(hist["payments"]) == 1
+    assert hist["payments"][0]["amount_cents"] == 3000
+    assert len(hist["debt_waivers"]) == 1
+    assert hist["debt_waivers"][0]["reason"] == "Cleaned the apartment to offset debt"
+
+    # 10. Verify General Balance Report still retains deleted person's history
+    gen_bal = await client.get(
+        f"/api/v1/reports/general-balance?household_id={household_id}",
+        headers={"Authorization": f"Bearer {token_admin}"},
+    )
+    assert gen_bal.status_code == 200
+    res_summaries = gen_bal.json()["residents"]
+    roomie_summary = next(r for r in res_summaries if r["person_id"] == roomie_person["id"])
+    assert roomie_summary["total_assigned_cents"] == 5000
+    assert roomie_summary["total_paid_cents"] == 3000
+    assert roomie_summary["total_waived_cents"] == 2000
+
+    # 11. Restore deleted resident
+    restore_resp = await client.post(
+        f"/api/v1/persons/{roomie_person['id']}/restore",
+        headers={"Authorization": f"Bearer {token_admin}"},
+    )
+    assert restore_resp.status_code == 200
+    assert restore_resp.json()["is_deleted"] is False
+    assert restore_resp.json()["is_active"] is True
+    assert restore_resp.json()["deleted_at"] is None
+
+
+

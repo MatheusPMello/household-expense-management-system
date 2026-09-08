@@ -7,6 +7,11 @@ if (-not (Test-Path "backend\venv") -or -not (Test-Path "frontend\node_modules")
 }
 
 Write-Host "`n=== [HomeLedger] Starting Development Servers ===" -ForegroundColor Green
+Write-Host "Checking and applying database migrations..." -ForegroundColor Cyan
+Push-Location "$PSScriptRoot\backend"
+& ".\venv\Scripts\alembic.exe" upgrade head
+Pop-Location
+
 Write-Host "Backend API:    http://localhost:8000" -ForegroundColor Cyan
 Write-Host "API Swagger:    http://localhost:8000/docs" -ForegroundColor Cyan
 Write-Host "Frontend App:   http://localhost:5173" -ForegroundColor Cyan

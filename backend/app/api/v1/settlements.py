@@ -1,5 +1,5 @@
 import uuid
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,8 +12,10 @@ from app.models.payment import Payment
 from app.models.debt_waiver import DebtWaiver
 from app.schemas.settlement import (
     PaymentCreate,
+    PaymentUpdate,
     PaymentOut,
     DebtWaiverCreate,
+    DebtWaiverUpdate,
     DebtWaiverOut,
 )
 from app.services.cycle_service import verify_cycle_is_open
@@ -107,16 +109,16 @@ async def record_payment(
 @router.get("/payments", response_model=List[PaymentOut])
 async def list_payments(
     billing_cycle_id: uuid.UUID = Query(...),
+    person_id: Optional[uuid.UUID] = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     cycle, _ = await get_cycle_and_member(billing_cycle_id, current_user.id, db)
 
-    stmt = (
-        select(Payment)
-        .where(Payment.billing_cycle_id == billing_cycle_id)
-        .order_by(Payment.paid_at.desc())
-    )
+    stmt = select(Payment).where(Payment.billing_cycle_id == billing_cycle_id)
+    if person_id is not None:
+        stmt = stmt.where(Payment.person_id == person_id)
+    stmt = stmt.order_by(Payment.paid_at.desc())
     payments = (await db.execute(stmt)).scalars().all()
 
     p_stmt = select(Person).where(Person.household_id == cycle.household_id)
@@ -136,6 +138,60 @@ async def list_payments(
         )
         for p in payments
     ]
+
+
+@router.patch("/payments/{payment_id}", response_model=PaymentOut)
+async def update_payment(
+    payment_id: uuid.UUID,
+    data: PaymentUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    stmt = select(Payment).where(Payment.id == payment_id)
+    payment = (await db.execute(stmt)).scalar_one_or_none()
+    if not payment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Payment record not found."
+        )
+
+    cycle, membership = await get_cycle_and_member(
+        payment.billing_cycle_id, current_user.id, db
+    )
+    verify_cycle_is_open(cycle)
+
+    person_stmt = select(Person).where(Person.id == payment.person_id)
+    person = (await db.execute(person_stmt)).scalar_one_or_none()
+    if not person:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Resident record not found."
+        )
+
+    if membership.role != "ADMIN" and person.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Members can only edit payments for themselves.",
+        )
+
+    if data.amount_cents is not None:
+        payment.amount_cents = data.amount_cents
+    if data.notes is not None:
+        payment.notes = data.notes
+    if data.proof_url is not None:
+        payment.proof_url = data.proof_url
+
+    await db.commit()
+    await db.refresh(payment)
+
+    return PaymentOut(
+        id=payment.id,
+        billing_cycle_id=payment.billing_cycle_id,
+        person_id=payment.person_id,
+        person_name=person.name,
+        amount_cents=payment.amount_cents,
+        paid_at=payment.paid_at,
+        notes=payment.notes,
+        proof_url=payment.proof_url,
+    )
 
 
 @router.delete("/payments/{payment_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -210,16 +266,16 @@ async def record_debt_waiver(
 @router.get("/waivers", response_model=List[DebtWaiverOut])
 async def list_waivers(
     billing_cycle_id: uuid.UUID = Query(...),
+    person_id: Optional[uuid.UUID] = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     cycle, _ = await get_cycle_and_member(billing_cycle_id, current_user.id, db)
 
-    stmt = (
-        select(DebtWaiver)
-        .where(DebtWaiver.billing_cycle_id == billing_cycle_id)
-        .order_by(DebtWaiver.waived_at.desc())
-    )
+    stmt = select(DebtWaiver).where(DebtWaiver.billing_cycle_id == billing_cycle_id)
+    if person_id is not None:
+        stmt = stmt.where(DebtWaiver.person_id == person_id)
+    stmt = stmt.order_by(DebtWaiver.waived_at.desc())
     waivers = (await db.execute(stmt)).scalars().all()
 
     p_stmt = select(Person).where(Person.household_id == cycle.household_id)
@@ -238,6 +294,54 @@ async def list_waivers(
         )
         for w in waivers
     ]
+
+
+@router.patch("/waivers/{waiver_id}", response_model=DebtWaiverOut)
+async def update_debt_waiver(
+    waiver_id: uuid.UUID,
+    data: DebtWaiverUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    stmt = select(DebtWaiver).where(DebtWaiver.id == waiver_id)
+    waiver = (await db.execute(stmt)).scalar_one_or_none()
+    if not waiver:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Debt waiver record not found."
+        )
+
+    cycle, membership = await get_cycle_and_member(
+        waiver.billing_cycle_id, current_user.id, db
+    )
+    verify_cycle_is_open(cycle)
+
+    if membership.role != "ADMIN":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators can edit debt waiver records.",
+        )
+
+    person_stmt = select(Person).where(Person.id == waiver.person_id)
+    person = (await db.execute(person_stmt)).scalar_one_or_none()
+    person_name = person.name if person else "Unknown"
+
+    if data.amount_cents is not None:
+        waiver.amount_cents = data.amount_cents
+    if data.reason is not None:
+        waiver.reason = data.reason.strip()
+
+    await db.commit()
+    await db.refresh(waiver)
+
+    return DebtWaiverOut(
+        id=waiver.id,
+        billing_cycle_id=waiver.billing_cycle_id,
+        person_id=waiver.person_id,
+        person_name=person_name,
+        amount_cents=waiver.amount_cents,
+        waived_at=waiver.waived_at,
+        reason=waiver.reason,
+    )
 
 
 @router.delete("/waivers/{waiver_id}", status_code=status.HTTP_204_NO_CONTENT)

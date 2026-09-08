@@ -1,13 +1,27 @@
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, func
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db, get_current_user
 from app.models.user import User
 from app.models.household import HouseholdMember
 from app.models.person import Person
-from app.schemas.person import PersonUpdate, PersonOut, PersonLinkUser
+from app.models.expense import Expense, ExpenseSplit
+from app.models.payment import Payment
+from app.models.debt_waiver import DebtWaiver
+from app.models.cycle import BillingCycle
+from app.schemas.person import (
+    PersonUpdate,
+    PersonOut,
+    PersonLinkUser,
+    PersonHistoryOut,
+    PersonSplitHistoryItem,
+    PersonPaymentHistoryItem,
+    PersonWaiverHistoryItem,
+)
 
 router = APIRouter(prefix="/persons", tags=["Persons / Residents"])
 
@@ -36,6 +50,8 @@ async def _build_person_out(person: Person, db: AsyncSession) -> PersonOut:
         role=role,
         name=person.name,
         is_active=person.is_active,
+        is_deleted=person.is_deleted,
+        deleted_at=person.deleted_at,
         created_at=person.created_at,
     )
 
@@ -66,14 +82,291 @@ async def update_person(
             detail="Only household administrators can update resident details.",
         )
 
+    if person.is_deleted:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot update a deleted resident. Please restore them first.",
+        )
+
     if data.name is not None:
         person.name = data.name.strip()
     if data.is_active is not None:
         person.is_active = data.is_active
 
+    if data.role is not None and person.user_id is not None:
+        # Check household member record for this user
+        mem_stmt = select(HouseholdMember).where(
+            HouseholdMember.household_id == person.household_id,
+            HouseholdMember.user_id == person.user_id,
+        )
+        target_mem = (await db.execute(mem_stmt)).scalar_one_or_none()
+        if target_mem and target_mem.role != data.role:
+            # If demoting from ADMIN to MEMBER, ensure at least one other ADMIN remains
+            if target_mem.role == "ADMIN" and data.role == "MEMBER":
+                other_admins_stmt = select(func.count(HouseholdMember.id)).where(
+                    HouseholdMember.household_id == person.household_id,
+                    HouseholdMember.role == "ADMIN",
+                    HouseholdMember.user_id != person.user_id,
+                )
+                other_admins = (await db.execute(other_admins_stmt)).scalar() or 0
+                if other_admins == 0:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Cannot demote the only administrator in the household.",
+                    )
+            target_mem.role = data.role
+
     await db.commit()
     await db.refresh(person)
     return await _build_person_out(person, db)
+
+
+@router.delete("/{person_id}", response_model=PersonOut)
+async def delete_person(
+    person_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    stmt = select(Person).where(Person.id == person_id)
+    person = (await db.execute(stmt)).scalar_one_or_none()
+    if not person:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Person not found."
+        )
+
+    # Only household ADMIN can delete residents
+    check_stmt = select(HouseholdMember).where(
+        HouseholdMember.household_id == person.household_id,
+        HouseholdMember.user_id == current_user.id,
+        HouseholdMember.role == "ADMIN",
+    )
+    if not (await db.execute(check_stmt)).scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only household administrators can delete residents.",
+        )
+
+    if person.is_deleted:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Resident is already deleted.",
+        )
+
+    # Prevent deleting own profile
+    if person.user_id == current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot delete your own resident profile.",
+        )
+
+    # If linked to an ADMIN, ensure at least one other ADMIN remains
+    if person.user_id:
+        mem_stmt = select(HouseholdMember).where(
+            HouseholdMember.household_id == person.household_id,
+            HouseholdMember.user_id == person.user_id,
+            HouseholdMember.role == "ADMIN",
+        )
+        if (await db.execute(mem_stmt)).scalar_one_or_none():
+            other_admins_stmt = select(func.count(HouseholdMember.id)).where(
+                HouseholdMember.household_id == person.household_id,
+                HouseholdMember.role == "ADMIN",
+                HouseholdMember.user_id != person.user_id,
+            )
+            other_admins = (await db.execute(other_admins_stmt)).scalar() or 0
+            if other_admins == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot delete the only administrator of the household.",
+                )
+
+    person.is_deleted = True
+    person.is_active = False
+    person.deleted_at = datetime.now(timezone.utc)
+
+    await db.commit()
+    await db.refresh(person)
+    return await _build_person_out(person, db)
+
+
+@router.post("/{person_id}/restore", response_model=PersonOut)
+async def restore_person(
+    person_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    stmt = select(Person).where(Person.id == person_id)
+    person = (await db.execute(stmt)).scalar_one_or_none()
+    if not person:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Person not found."
+        )
+
+    # Only household ADMIN can restore residents
+    check_stmt = select(HouseholdMember).where(
+        HouseholdMember.household_id == person.household_id,
+        HouseholdMember.user_id == current_user.id,
+        HouseholdMember.role == "ADMIN",
+    )
+    if not (await db.execute(check_stmt)).scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only household administrators can restore residents.",
+        )
+
+    if not person.is_deleted:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Resident is not deleted.",
+        )
+
+    person.is_deleted = False
+    person.is_active = True
+    person.deleted_at = None
+
+    await db.commit()
+    await db.refresh(person)
+    return await _build_person_out(person, db)
+
+
+@router.get("/{person_id}/history", response_model=PersonHistoryOut)
+async def get_person_history(
+    person_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    stmt = select(Person).where(Person.id == person_id)
+    person = (await db.execute(stmt)).scalar_one_or_none()
+    if not person:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Person not found."
+        )
+
+    # Check caller is a member of this household
+    check_stmt = select(HouseholdMember).where(
+        HouseholdMember.household_id == person.household_id,
+        HouseholdMember.user_id == current_user.id,
+    )
+    if not (await db.execute(check_stmt)).scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. You are not a member of this household.",
+        )
+
+    # 1. Fetch splits with expense and cycle info
+    splits_stmt = (
+        select(ExpenseSplit)
+        .where(ExpenseSplit.person_id == person.id)
+        .options(
+            selectinload(ExpenseSplit.expense).selectinload(Expense.billing_cycle)
+        )
+    )
+    splits = (await db.execute(splits_stmt)).scalars().all()
+
+    splits_out = []
+    total_assigned = 0
+    for s in sorted(splits, key=lambda x: (x.expense.due_date, x.expense.created_at), reverse=True):
+        total_assigned += s.assigned_amount_cents
+        cycle = s.expense.billing_cycle
+        splits_out.append(
+            PersonSplitHistoryItem(
+                expense_id=s.expense_id,
+                billing_cycle_id=s.expense.billing_cycle_id,
+                cycle_year=cycle.year if cycle else 0,
+                cycle_month=cycle.month if cycle else 0,
+                expense_title=s.expense.title,
+                category=s.expense.category,
+                due_date=s.expense.due_date,
+                assigned_amount_cents=s.assigned_amount_cents,
+                is_paid=s.expense.is_paid,
+            )
+        )
+
+    # 2. Fetch payments with cycle info
+    payments_stmt = (
+        select(Payment)
+        .where(Payment.person_id == person.id)
+        .options(selectinload(Payment.billing_cycle))
+        .order_by(Payment.paid_at.desc())
+    )
+    payments = (await db.execute(payments_stmt)).scalars().all()
+    payments_out = []
+    total_paid = 0
+    for p in payments:
+        total_paid += p.amount_cents
+        cycle = p.billing_cycle
+        payments_out.append(
+            PersonPaymentHistoryItem(
+                id=p.id,
+                billing_cycle_id=p.billing_cycle_id,
+                cycle_year=cycle.year if cycle else 0,
+                cycle_month=cycle.month if cycle else 0,
+                amount_cents=p.amount_cents,
+                paid_at=p.paid_at,
+                notes=p.notes,
+                proof_url=p.proof_url,
+            )
+        )
+
+    # 3. Fetch debt waivers with cycle info
+    waivers_stmt = (
+        select(DebtWaiver)
+        .where(DebtWaiver.person_id == person.id)
+        .options(selectinload(DebtWaiver.billing_cycle))
+        .order_by(DebtWaiver.waived_at.desc())
+    )
+    waivers = (await db.execute(waivers_stmt)).scalars().all()
+    waivers_out = []
+    total_waived = 0
+    for w in waivers:
+        total_waived += w.amount_cents
+        cycle = w.billing_cycle
+        waivers_out.append(
+            PersonWaiverHistoryItem(
+                id=w.id,
+                billing_cycle_id=w.billing_cycle_id,
+                cycle_year=cycle.year if cycle else 0,
+                cycle_month=cycle.month if cycle else 0,
+                amount_cents=w.amount_cents,
+                waived_at=w.waived_at,
+                reason=w.reason,
+            )
+        )
+
+    user_email: Optional[str] = None
+    role: Optional[str] = None
+    if person.user_id:
+        user_stmt = select(User).where(User.id == person.user_id)
+        u = (await db.execute(user_stmt)).scalar_one_or_none()
+        if u:
+            user_email = u.email
+        mem_stmt = select(HouseholdMember).where(
+            HouseholdMember.household_id == person.household_id,
+            HouseholdMember.user_id == person.user_id,
+        )
+        m = (await db.execute(mem_stmt)).scalar_one_or_none()
+        if m:
+            role = m.role
+
+    return PersonHistoryOut(
+        person_id=person.id,
+        household_id=person.household_id,
+        name=person.name,
+        person_name=person.name,
+        user_id=person.user_id,
+        user_email=user_email,
+        role=role,
+        is_active=person.is_active,
+        is_deleted=person.is_deleted,
+        deleted_at=person.deleted_at,
+        created_at=person.created_at,
+        total_assigned_cents=total_assigned,
+        total_paid_cents=total_paid,
+        total_waived_cents=total_waived,
+        outstanding_balance_cents=total_assigned - (total_paid + total_waived),
+        splits=splits_out,
+        payments=payments_out,
+        debt_waivers=waivers_out,
+    )
 
 
 @router.post("/{person_id}/link-user", response_model=PersonOut)

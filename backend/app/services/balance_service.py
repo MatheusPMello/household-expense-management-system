@@ -52,8 +52,8 @@ async def calculate_cycle_report(
 
     # Aggregations
     total_budget_cents = sum(e.total_amount_cents for e in expenses)
-    total_paid_to_vendor_cents = sum(
-        e.total_amount_cents for e in expenses if e.paid_to_vendor
+    total_paid_cents = sum(
+        e.total_amount_cents for e in expenses if e.is_paid
     )
     total_collected_cents = sum(p.amount_cents for p in payments)
     total_waived_cents = sum(w.amount_cents for w in waivers)
@@ -123,13 +123,15 @@ async def calculate_cycle_report(
             ExpenseOut(
                 id=e.id,
                 billing_cycle_id=e.billing_cycle_id,
+                template_id=e.template_id,
                 title=e.title,
                 total_amount_cents=e.total_amount_cents,
                 is_fixed=e.is_fixed,
                 category=e.category,
                 due_date=e.due_date,
-                paid_to_vendor=e.paid_to_vendor,
+                is_paid=e.is_paid,
                 split_type=e.split_type,
+                status=e.status,
                 created_at=e.created_at,
                 splits=splits_out,
             )
@@ -141,7 +143,7 @@ async def calculate_cycle_report(
         month=cycle.month,
         status=cycle.status,
         total_budget_cents=total_budget_cents,
-        total_paid_to_vendor_cents=total_paid_to_vendor_cents,
+        total_paid_cents=total_paid_cents,
         total_collected_cents=total_collected_cents,
         total_waived_cents=total_waived_cents,
         residents=residents,

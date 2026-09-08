@@ -1,11 +1,35 @@
 import React from 'react';
 
 interface StatusBadgeProps {
-  type: 'cycle' | 'vendor' | 'role' | 'split';
+  type: 'cycle' | 'payment' | 'role' | 'split' | 'expense_status';
   value: string;
 }
 
 export const StatusBadge: React.FC<StatusBadgeProps> = ({ type, value }) => {
+  if (type === 'expense_status') {
+    if (value === 'PENDING_VALUE') {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+          <span className="w-1.5 h-1.5 rounded-full mr-1.5 bg-amber-500 animate-pulse" />
+          Awaiting Bill
+        </span>
+      );
+    }
+    if (value === 'READY') {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+          <span className="w-1.5 h-1.5 rounded-full mr-1.5 bg-emerald-500" />
+          Ready
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700">
+        {value}
+      </span>
+    );
+  }
+
   if (type === 'cycle') {
     const isOpen = value === 'OPEN';
     return (
@@ -26,7 +50,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ type, value }) => {
     );
   }
 
-  if (type === 'vendor') {
+  if (type === 'payment') {
     const isPaid = value === 'true' || value === 'Paid';
     return (
       <span
@@ -36,7 +60,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ type, value }) => {
             : 'bg-amber-50 text-amber-700 border border-amber-200'
         }`}
       >
-        {isPaid ? 'Paid to Vendor' : 'Pending Vendor'}
+        {isPaid ? 'Paid' : 'Pending'}
       </span>
     );
   }

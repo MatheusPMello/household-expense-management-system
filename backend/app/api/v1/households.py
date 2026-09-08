@@ -195,10 +195,16 @@ async def add_household_member(
             user_id=target_user.id,
             name=target_user.full_name,
             is_active=True,
+            is_deleted=False,
         )
         db.add(new_person)
-    elif existing_person.user_id is None:
-        existing_person.user_id = target_user.id
+    else:
+        if existing_person.user_id is None:
+            existing_person.user_id = target_user.id
+        if existing_person.is_deleted:
+            existing_person.is_deleted = False
+            existing_person.is_active = True
+            existing_person.deleted_at = None
 
     await db.commit()
     await db.refresh(new_membership)
@@ -217,6 +223,7 @@ async def add_household_member(
 @router.get("/{household_id}/persons", response_model=List[PersonOut])
 async def list_household_persons(
     household_id: uuid.UUID,
+    include_deleted: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -234,8 +241,11 @@ async def list_household_persons(
         select(Person)
         .where(Person.household_id == household_id)
         .options(selectinload(Person.user))
-        .order_by(Person.name)
     )
+    if not include_deleted:
+        stmt = stmt.where(Person.is_deleted == False)
+
+    stmt = stmt.order_by(Person.is_deleted.asc(), Person.name.asc())
     persons = (await db.execute(stmt)).scalars().all()
 
     # Query members to resolve household roles
@@ -254,6 +264,8 @@ async def list_household_persons(
             role=role_map.get(p.user_id) if p.user_id else None,
             name=p.name,
             is_active=p.is_active,
+            is_deleted=p.is_deleted,
+            deleted_at=p.deleted_at,
             created_at=p.created_at,
         )
         for p in persons
@@ -333,5 +345,7 @@ async def create_household_person(
         role=target_role,
         name=person.name,
         is_active=person.is_active,
+        is_deleted=person.is_deleted,
+        deleted_at=person.deleted_at,
         created_at=person.created_at,
     )

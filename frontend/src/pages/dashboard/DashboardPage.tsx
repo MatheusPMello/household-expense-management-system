@@ -6,6 +6,8 @@ import {
   BillingCycle,
   CurrentCycleReport,
   ResidentCycleBalance,
+  Payment,
+  DebtWaiver,
 } from '../../types';
 import {
   formatCentsToCurrency,
@@ -29,6 +31,9 @@ import {
   ChevronUp,
   Receipt,
   AlertCircle,
+  History,
+  Edit2,
+  Trash2,
 } from 'lucide-react';
 
 export const DashboardPage: React.FC = () => {
@@ -43,6 +48,24 @@ export const DashboardPage: React.FC = () => {
   const [isWaiverModalOpen, setIsWaiverModalOpen] = useState(false);
   const [isCreateCycleModalOpen, setIsCreateCycleModalOpen] = useState(false);
   const [selectedResident, setSelectedResident] = useState<ResidentCycleBalance | null>(null);
+
+  // Settlement History & Edit / Delete Modals state
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [historyResident, setHistoryResident] = useState<ResidentCycleBalance | null>(null);
+  const [historyTab, setHistoryTab] = useState<'payments' | 'waivers'>('payments');
+  const [editingPayment, setEditingPayment] = useState<Payment | null>(null);
+  const [editPaymentAmountStr, setEditPaymentAmountStr] = useState('');
+  const [editPaymentNotes, setEditPaymentNotes] = useState('');
+  const [isEditPaymentModalOpen, setIsEditPaymentModalOpen] = useState(false);
+  const [editingWaiver, setEditingWaiver] = useState<DebtWaiver | null>(null);
+  const [editWaiverAmountStr, setEditWaiverAmountStr] = useState('');
+  const [editWaiverReason, setEditWaiverReason] = useState('');
+  const [isEditWaiverModalOpen, setIsEditWaiverModalOpen] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<{
+    type: 'payment' | 'waiver';
+    id: string;
+    name: string;
+  } | null>(null);
 
   // Form states
   const [paymentAmountStr, setPaymentAmountStr] = useState('');
@@ -88,22 +111,47 @@ export const DashboardPage: React.FC = () => {
   });
 
   // Mutations
-  const toggleVendorStatus = useMutation({
+  const togglePaymentStatus = useMutation({
     mutationFn: async ({
       expenseId,
-      paidToVendor,
+      isPaid,
     }: {
       expenseId: string;
-      paidToVendor: boolean;
+      isPaid: boolean;
     }) => {
-      await api.patch(`/expenses/${expenseId}/vendor-status`, {
-        paid_to_vendor: paidToVendor,
+      await api.patch(`/expenses/${expenseId}/payment-status`, {
+        is_paid: isPaid,
       });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['cycle-report', activeCycle?.id] });
       queryClient.invalidateQueries({ queryKey: ['cycles', activeHousehold?.household_id] });
     },
+  });
+
+  // 3. Fetch payments and waivers for history modal
+  const { data: residentPayments = [], isLoading: paymentsLoading } = useQuery<Payment[]>({
+    queryKey: ['cycle-payments', activeCycle?.id, historyResident?.person_id],
+    queryFn: async () => {
+      if (!activeCycle || !historyResident) return [];
+      const res = await api.get<Payment[]>(
+        `/settlements/payments?billing_cycle_id=${activeCycle.id}&person_id=${historyResident.person_id}`
+      );
+      return res.data;
+    },
+    enabled: isHistoryModalOpen && !!activeCycle && !!historyResident,
+  });
+
+  const { data: residentWaivers = [], isLoading: waiversLoading } = useQuery<DebtWaiver[]>({
+    queryKey: ['cycle-waivers', activeCycle?.id, historyResident?.person_id],
+    queryFn: async () => {
+      if (!activeCycle || !historyResident) return [];
+      const res = await api.get<DebtWaiver[]>(
+        `/settlements/waivers?billing_cycle_id=${activeCycle.id}&person_id=${historyResident.person_id}`
+      );
+      return res.data;
+    },
+    enabled: isHistoryModalOpen && !!activeCycle && !!historyResident,
   });
 
   const recordPayment = useMutation({
@@ -125,6 +173,46 @@ export const DashboardPage: React.FC = () => {
       setPaymentNotes('');
       setFormError('');
       refetchReport();
+      queryClient.invalidateQueries({ queryKey: ['cycle-payments'] });
+      queryClient.invalidateQueries({ queryKey: ['cycles', activeHousehold?.household_id] });
+    },
+    onError: (err: any) => {
+      setFormError(err.response?.data?.detail || err.message);
+    },
+  });
+
+  const updatePayment = useMutation({
+    mutationFn: async () => {
+      if (!editingPayment) return;
+      const cents = parseCurrencyToCents(editPaymentAmountStr);
+      if (cents <= 0) throw new Error('Payment amount must be greater than zero.');
+
+      await api.patch(`/settlements/payments/${editingPayment.id}`, {
+        amount_cents: cents,
+        notes: editPaymentNotes || null,
+      });
+    },
+    onSuccess: () => {
+      setIsEditPaymentModalOpen(false);
+      setEditingPayment(null);
+      setFormError('');
+      refetchReport();
+      queryClient.invalidateQueries({ queryKey: ['cycle-payments'] });
+      queryClient.invalidateQueries({ queryKey: ['cycles', activeHousehold?.household_id] });
+    },
+    onError: (err: any) => {
+      setFormError(err.response?.data?.detail || err.message);
+    },
+  });
+
+  const deletePayment = useMutation({
+    mutationFn: async (paymentId: string) => {
+      await api.delete(`/settlements/payments/${paymentId}`);
+    },
+    onSuccess: () => {
+      setDeleteConfirm(null);
+      refetchReport();
+      queryClient.invalidateQueries({ queryKey: ['cycle-payments'] });
       queryClient.invalidateQueries({ queryKey: ['cycles', activeHousehold?.household_id] });
     },
     onError: (err: any) => {
@@ -152,6 +240,47 @@ export const DashboardPage: React.FC = () => {
       setWaiverReason('');
       setFormError('');
       refetchReport();
+      queryClient.invalidateQueries({ queryKey: ['cycle-waivers'] });
+      queryClient.invalidateQueries({ queryKey: ['cycles', activeHousehold?.household_id] });
+    },
+    onError: (err: any) => {
+      setFormError(err.response?.data?.detail || err.message);
+    },
+  });
+
+  const updateWaiver = useMutation({
+    mutationFn: async () => {
+      if (!editingWaiver) return;
+      const cents = parseCurrencyToCents(editWaiverAmountStr);
+      if (cents <= 0) throw new Error('Waiver amount must be greater than zero.');
+      if (!editWaiverReason.trim()) throw new Error('A detailed reason is required for audited debt waivers.');
+
+      await api.patch(`/settlements/waivers/${editingWaiver.id}`, {
+        amount_cents: cents,
+        reason: editWaiverReason.trim(),
+      });
+    },
+    onSuccess: () => {
+      setIsEditWaiverModalOpen(false);
+      setEditingWaiver(null);
+      setFormError('');
+      refetchReport();
+      queryClient.invalidateQueries({ queryKey: ['cycle-waivers'] });
+      queryClient.invalidateQueries({ queryKey: ['cycles', activeHousehold?.household_id] });
+    },
+    onError: (err: any) => {
+      setFormError(err.response?.data?.detail || err.message);
+    },
+  });
+
+  const deleteWaiver = useMutation({
+    mutationFn: async (waiverId: string) => {
+      await api.delete(`/settlements/waivers/${waiverId}`);
+    },
+    onSuccess: () => {
+      setDeleteConfirm(null);
+      refetchReport();
+      queryClient.invalidateQueries({ queryKey: ['cycle-waivers'] });
       queryClient.invalidateQueries({ queryKey: ['cycles', activeHousehold?.household_id] });
     },
     onError: (err: any) => {
@@ -328,10 +457,10 @@ export const DashboardPage: React.FC = () => {
               </div>
               <div>
                 <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                  Paid to Vendors
+                  Paid Expenses
                 </p>
                 <p className="text-2xl font-bold text-emerald-600 mt-0.5">
-                  {formatCentsToCurrency(report.total_paid_to_vendor_cents)}
+                  {formatCentsToCurrency(report.total_paid_cents)}
                 </p>
                 <p className="text-xs text-slate-500 mt-0.5">
                   Utilities & bills settled
@@ -438,45 +567,63 @@ export const DashboardPage: React.FC = () => {
                   </div>
 
                   {/* Quick Actions */}
-                  {activeCycle.status === 'OPEN' && (
-                    <div className="flex items-center space-x-2 mt-4 pt-3 border-t border-slate-100">
-                      <button
-                        onClick={() => {
-                          setSelectedResident(r);
-                          setPaymentAmountStr(
-                            r.remaining_balance_cents > 0
-                              ? (r.remaining_balance_cents / 100).toFixed(2)
-                              : ''
-                          );
-                          setFormError('');
-                          setIsPaymentModalOpen(true);
-                        }}
-                        className="flex-1 py-1.5 px-3 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-medium text-xs rounded-lg transition-colors border border-emerald-200 text-center"
-                      >
-                        + Record Payment
-                      </button>
-
-                      {activeHousehold.role === 'ADMIN' && (
+                  <div className="flex items-center space-x-2 mt-4 pt-3 border-t border-slate-100">
+                    {activeCycle.status === 'OPEN' && (
+                      <>
                         <button
                           onClick={() => {
                             setSelectedResident(r);
-                            setWaiverAmountStr(
+                            setPaymentAmountStr(
                               r.remaining_balance_cents > 0
                                 ? (r.remaining_balance_cents / 100).toFixed(2)
                                 : ''
                             );
-                            setWaiverReason('');
                             setFormError('');
-                            setIsWaiverModalOpen(true);
+                            setIsPaymentModalOpen(true);
                           }}
-                          className="py-1.5 px-3 bg-amber-50 hover:bg-amber-100 text-amber-700 font-medium text-xs rounded-lg transition-colors border border-amber-200 text-center"
-                          title="Waive remaining debt without penalizing operational ledger"
+                          className="flex-1 py-1.5 px-3 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-medium text-xs rounded-lg transition-colors border border-emerald-200 text-center"
                         >
-                          Waive Amount
+                          + Record Payment
                         </button>
-                      )}
-                    </div>
-                  )}
+
+                        {activeHousehold.role === 'ADMIN' && (
+                          <button
+                            onClick={() => {
+                              setSelectedResident(r);
+                              setWaiverAmountStr(
+                                r.remaining_balance_cents > 0
+                                  ? (r.remaining_balance_cents / 100).toFixed(2)
+                                  : ''
+                              );
+                              setWaiverReason('');
+                              setFormError('');
+                              setIsWaiverModalOpen(true);
+                            }}
+                            className="py-1.5 px-3 bg-amber-50 hover:bg-amber-100 text-amber-700 font-medium text-xs rounded-lg transition-colors border border-amber-200 text-center"
+                            title="Waive remaining debt without penalizing operational ledger"
+                          >
+                            Waive Amount
+                          </button>
+                        )}
+                      </>
+                    )}
+
+                    <button
+                      onClick={() => {
+                        setHistoryResident(r);
+                        setHistoryTab('payments');
+                        setFormError('');
+                        setIsHistoryModalOpen(true);
+                      }}
+                      className={`py-1.5 px-2.5 bg-slate-50 hover:bg-slate-100 text-slate-600 font-medium text-xs rounded-lg transition-colors border border-slate-200 flex items-center space-x-1 ${
+                        activeCycle.status !== 'OPEN' ? 'w-full justify-center' : ''
+                      }`}
+                      title="View Settlement & Waiver History"
+                    >
+                      <History className="w-3.5 h-3.5" />
+                      <span>History</span>
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -490,7 +637,7 @@ export const DashboardPage: React.FC = () => {
                   Cycle Expenses & Splits
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Detailed expense allocations and vendor payment statuses
+                  Detailed expense allocations and payment statuses
                 </p>
               </div>
             </div>
@@ -508,7 +655,7 @@ export const DashboardPage: React.FC = () => {
                       <th className="px-6 py-3">Category</th>
                       <th className="px-6 py-3">Due Date</th>
                       <th className="px-6 py-3">Total Amount</th>
-                      <th className="px-6 py-3">Vendor Status</th>
+                      <th className="px-6 py-3">Payment Status</th>
                       <th className="px-6 py-3">Split Method</th>
                       <th className="px-6 py-3 text-right">Details</th>
                     </tr>
@@ -543,17 +690,17 @@ export const DashboardPage: React.FC = () => {
                             <td className="px-6 py-4">
                               <button
                                 onClick={() =>
-                                  toggleVendorStatus.mutate({
+                                  togglePaymentStatus.mutate({
                                     expenseId: e.id,
-                                    paidToVendor: !e.paid_to_vendor,
+                                    isPaid: !e.is_paid,
                                   })
                                 }
                                 className="group flex items-center space-x-1.5 focus:outline-none"
-                                title="Click to toggle vendor settlement"
+                                title="Click to toggle payment settlement"
                               >
                                 <StatusBadge
-                                  type="vendor"
-                                  value={e.paid_to_vendor ? 'Paid' : 'Pending'}
+                                  type="payment"
+                                  value={e.is_paid ? 'Paid' : 'Pending'}
                                 />
                               </button>
                             </td>
@@ -835,6 +982,378 @@ export const DashboardPage: React.FC = () => {
             </button>
           </div>
         </form>
+      </Modal>
+
+      {/* Modal: Settlement & Waiver History */}
+      <Modal
+        isOpen={isHistoryModalOpen}
+        onClose={() => {
+          setIsHistoryModalOpen(false);
+          setHistoryResident(null);
+        }}
+        title={`Settlement History: ${historyResident?.person_name || ''}`}
+      >
+        <div className="space-y-4">
+          <div className="flex border-b border-slate-200">
+            <button
+              onClick={() => setHistoryTab('payments')}
+              className={`pb-2 px-4 text-sm font-medium border-b-2 transition-colors ${
+                historyTab === 'payments'
+                  ? 'border-emerald-500 text-emerald-600 font-semibold'
+                  : 'border-transparent text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              Payments ({residentPayments.length})
+            </button>
+            <button
+              onClick={() => setHistoryTab('waivers')}
+              className={`pb-2 px-4 text-sm font-medium border-b-2 transition-colors ${
+                historyTab === 'waivers'
+                  ? 'border-amber-500 text-amber-600 font-semibold'
+                  : 'border-transparent text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              Debt Waivers ({residentWaivers.length})
+            </button>
+          </div>
+
+          {formError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg flex items-center space-x-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <span>{formError}</span>
+            </div>
+          )}
+
+          {historyTab === 'payments' ? (
+            paymentsLoading ? (
+              <div className="text-center py-6 text-slate-400 text-xs">Loading payments...</div>
+            ) : residentPayments.length === 0 ? (
+              <div className="text-center py-6 text-slate-400 text-xs">
+                No payments registered for this cycle.
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                {residentPayments.map((p) => (
+                  <div
+                    key={p.id}
+                    className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between"
+                  >
+                    <div>
+                      <div className="flex items-center space-x-2">
+                        <span className="font-bold text-emerald-600 text-sm">
+                          {formatCentsToCurrency(p.amount_cents)}
+                        </span>
+                        <span className="text-xs text-slate-400">
+                          {formatDate(p.paid_at)}
+                        </span>
+                      </div>
+                      {p.notes && (
+                        <p className="text-xs text-slate-600 mt-0.5">{p.notes}</p>
+                      )}
+                    </div>
+                    {activeCycle?.status === 'OPEN' && (
+                      <div className="flex items-center space-x-1">
+                        <button
+                          onClick={() => {
+                            setEditingPayment(p);
+                            setEditPaymentAmountStr((p.amount_cents / 100).toFixed(2));
+                            setEditPaymentNotes(p.notes || '');
+                            setFormError('');
+                            setIsEditPaymentModalOpen(true);
+                          }}
+                          className="p-1.5 text-slate-500 hover:text-emerald-600 hover:bg-white rounded-md transition-colors border border-transparent hover:border-slate-200"
+                          title="Edit Payment"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        {activeHousehold.role === 'ADMIN' && (
+                          <button
+                            onClick={() => {
+                              setDeleteConfirm({
+                                type: 'payment',
+                                id: p.id,
+                                name: `${formatCentsToCurrency(p.amount_cents)} on ${formatDate(p.paid_at)}`,
+                              });
+                            }}
+                            className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-white rounded-md transition-colors border border-transparent hover:border-slate-200"
+                            title="Delete Payment"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )
+          ) : waiversLoading ? (
+            <div className="text-center py-6 text-slate-400 text-xs">Loading waivers...</div>
+          ) : residentWaivers.length === 0 ? (
+            <div className="text-center py-6 text-slate-400 text-xs">
+              No debt waivers registered for this cycle.
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+              {residentWaivers.map((w) => (
+                <div
+                  key={w.id}
+                  className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between"
+                >
+                  <div className="max-w-[75%]">
+                    <div className="flex items-center space-x-2">
+                      <span className="font-bold text-amber-600 text-sm">
+                        {formatCentsToCurrency(w.amount_cents)}
+                      </span>
+                      <span className="text-xs text-slate-400">
+                        {formatDate(w.waived_at)}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-700 mt-0.5 italic">
+                      "{w.reason}"
+                    </p>
+                  </div>
+                  {activeCycle?.status === 'OPEN' && activeHousehold.role === 'ADMIN' && (
+                    <div className="flex items-center space-x-1">
+                      <button
+                        onClick={() => {
+                          setEditingWaiver(w);
+                          setEditWaiverAmountStr((w.amount_cents / 100).toFixed(2));
+                          setEditWaiverReason(w.reason);
+                          setFormError('');
+                          setIsEditWaiverModalOpen(true);
+                        }}
+                        className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-white rounded-md transition-colors border border-transparent hover:border-slate-200"
+                        title="Edit Waiver"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => {
+                          setDeleteConfirm({
+                            type: 'waiver',
+                            id: w.id,
+                            name: `${formatCentsToCurrency(w.amount_cents)} ("${w.reason}")`,
+                          });
+                        }}
+                        className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-white rounded-md transition-colors border border-transparent hover:border-slate-200"
+                        title="Delete Waiver"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex justify-end pt-2 border-t border-slate-100">
+            <button
+              onClick={() => {
+                setIsHistoryModalOpen(false);
+                setHistoryResident(null);
+              }}
+              className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Modal: Edit Payment */}
+      <Modal
+        isOpen={isEditPaymentModalOpen}
+        onClose={() => {
+          setIsEditPaymentModalOpen(false);
+          setEditingPayment(null);
+        }}
+        title={`Edit Payment (${historyResident?.person_name || ''})`}
+      >
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            updatePayment.mutate();
+          }}
+          className="space-y-4"
+        >
+          {formError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg flex items-center space-x-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <span>{formError}</span>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+              Payment Amount ($)
+            </label>
+            <div className="relative">
+              <DollarSign className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="number"
+                step="0.01"
+                required
+                value={editPaymentAmountStr}
+                onChange={(e) => setEditPaymentAmountStr(e.target.value)}
+                placeholder="100.00"
+                className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-800 focus:bg-white focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+              Notes (Optional)
+            </label>
+            <input
+              type="text"
+              value={editPaymentNotes}
+              onChange={(e) => setEditPaymentNotes(e.target.value)}
+              placeholder="e.g. Bank transfer, Venmo..."
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-800 focus:bg-white focus:ring-2 focus:ring-emerald-500"
+            />
+          </div>
+
+          <div className="flex justify-end space-x-2 pt-2">
+            <button
+              type="button"
+              onClick={() => {
+                setIsEditPaymentModalOpen(false);
+                setEditingPayment(null);
+              }}
+              className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={updatePayment.isPending}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg shadow-sm disabled:opacity-50"
+            >
+              {updatePayment.isPending ? 'Saving...' : 'Save Changes'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Modal: Edit Debt Waiver */}
+      <Modal
+        isOpen={isEditWaiverModalOpen}
+        onClose={() => {
+          setIsEditWaiverModalOpen(false);
+          setEditingWaiver(null);
+        }}
+        title={`Edit Debt Waiver (${historyResident?.person_name || ''})`}
+      >
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            updateWaiver.mutate();
+          }}
+          className="space-y-4"
+        >
+          {formError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg flex items-center space-x-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <span>{formError}</span>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+              Amount to Waive ($)
+            </label>
+            <div className="relative">
+              <DollarSign className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="number"
+                step="0.01"
+                required
+                value={editWaiverAmountStr}
+                onChange={(e) => setEditWaiverAmountStr(e.target.value)}
+                placeholder="50.00"
+                className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-800 focus:bg-white focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+              Mandatory Audit Reason
+            </label>
+            <textarea
+              required
+              rows={3}
+              value={editWaiverReason}
+              onChange={(e) => setEditWaiverReason(e.target.value)}
+              placeholder="e.g. Mutual agreement for labor offset..."
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-800 focus:bg-white focus:ring-2 focus:ring-amber-500"
+            />
+          </div>
+
+          <div className="flex justify-end space-x-2 pt-2">
+            <button
+              type="button"
+              onClick={() => {
+                setIsEditWaiverModalOpen(false);
+                setEditingWaiver(null);
+              }}
+              className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={updateWaiver.isPending}
+              className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium rounded-lg shadow-sm disabled:opacity-50"
+            >
+              {updateWaiver.isPending ? 'Saving...' : 'Save Changes'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Modal: Confirm Deletion */}
+      <Modal
+        isOpen={!!deleteConfirm}
+        onClose={() => setDeleteConfirm(null)}
+        title="Confirm Deletion"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-slate-600">
+            Are you sure you want to delete this {deleteConfirm?.type}:{' '}
+            <span className="font-semibold text-slate-900">{deleteConfirm?.name}</span>?
+          </p>
+          <p className="text-xs text-slate-500">
+            This action will permanently remove the record and recalculate the resident's remaining cycle balance.
+          </p>
+          <div className="flex justify-end space-x-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setDeleteConfirm(null)}
+              className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={deletePayment.isPending || deleteWaiver.isPending}
+              onClick={() => {
+                if (!deleteConfirm) return;
+                if (deleteConfirm.type === 'payment') {
+                  deletePayment.mutate(deleteConfirm.id);
+                } else {
+                  deleteWaiver.mutate(deleteConfirm.id);
+                }
+              }}
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-sm font-medium rounded-lg shadow-sm disabled:opacity-50"
+            >
+              {deletePayment.isPending || deleteWaiver.isPending ? 'Deleting...' : 'Delete Record'}
+            </button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

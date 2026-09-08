@@ -99,14 +99,14 @@ async def test_full_cycle_and_ledger_workflow(client: AsyncClient):
     for s in expense_data["splits"]:
         assert s["assigned_amount_cents"] == 4000  # 12000 / 3 = 4000 cents
 
-    # Toggle paid to vendor
+    # Toggle paid status
     toggle_resp = await client.patch(
-        f"/api/v1/expenses/{expense_data['id']}/vendor-status",
-        json={"paid_to_vendor": True},
+        f"/api/v1/expenses/{expense_data['id']}/payment-status",
+        json={"is_paid": True},
         headers=headers,
     )
     assert toggle_resp.status_code == 200
-    assert toggle_resp.json()["paid_to_vendor"] is True
+    assert toggle_resp.json()["is_paid"] is True
 
     # At this point:
     # Admin assigned: 3000 + 4000 = 7000 cents
@@ -411,6 +411,80 @@ async def test_settlement_deletion_and_rbac(client: AsyncClient):
     )
     assert member_del_waiver.status_code == 403
 
+    # Member attempts to update Admin's payment -> 403 Forbidden
+    member_patch_pay = await client.patch(
+        f"/api/v1/settlements/payments/{pay_id}",
+        headers=headers_member,
+        json={"amount_cents": 6000},
+    )
+    assert member_patch_pay.status_code == 403
+
+    # Member attempts to update debt waiver -> 403 Forbidden
+    member_patch_waiver = await client.patch(
+        f"/api/v1/settlements/waivers/{waiver_id}",
+        headers=headers_member,
+        json={"amount_cents": 1500},
+    )
+    assert member_patch_waiver.status_code == 403
+
+    # Admin updates payment -> 200 OK
+    admin_patch_pay = await client.patch(
+        f"/api/v1/settlements/payments/{pay_id}",
+        headers=headers_admin,
+        json={"amount_cents": 7500, "notes": "Updated note"},
+    )
+    assert admin_patch_pay.status_code == 200
+    assert admin_patch_pay.json()["amount_cents"] == 7500
+    assert admin_patch_pay.json()["notes"] == "Updated note"
+
+    # Admin updates debt waiver -> 200 OK
+    admin_patch_waiver = await client.patch(
+        f"/api/v1/settlements/waivers/{waiver_id}",
+        headers=headers_admin,
+        json={"amount_cents": 2500, "reason": "Updated audit reason"},
+    )
+    assert admin_patch_waiver.status_code == 200
+    assert admin_patch_waiver.json()["amount_cents"] == 2500
+    assert admin_patch_waiver.json()["reason"] == "Updated audit reason"
+
+    # Verify query filtering by person_id
+    filtered_pay = await client.get(
+        f"/api/v1/settlements/payments?billing_cycle_id={cycle['id']}&person_id={admin_pid}",
+        headers=headers_admin,
+    )
+    assert filtered_pay.status_code == 200
+    assert len(filtered_pay.json()) == 1
+    assert filtered_pay.json()[0]["amount_cents"] == 7500
+
+    filtered_waivers = await client.get(
+        f"/api/v1/settlements/waivers?billing_cycle_id={cycle['id']}&person_id={admin_pid}",
+        headers=headers_admin,
+    )
+    assert filtered_waivers.status_code == 200
+    assert len(filtered_waivers.json()) == 1
+    assert filtered_waivers.json()[0]["amount_cents"] == 2500
+
+    # Member edits their own payment
+    all_persons_resp = await client.get(f"/api/v1/households/{household_id}/persons", headers=headers_admin)
+    member_p = next(p for p in all_persons_resp.json() if p.get("user_email") == "settle_member@example.com")
+    
+    member_pay_resp = await client.post(
+        "/api/v1/settlements/payments",
+        headers=headers_member,
+        json={"billing_cycle_id": cycle["id"], "person_id": member_p["id"], "amount_cents": 3000},
+    )
+    assert member_pay_resp.status_code == 201
+    member_pay_id = member_pay_resp.json()["id"]
+
+    # Member patches their own payment -> 200 OK
+    member_self_patch = await client.patch(
+        f"/api/v1/settlements/payments/{member_pay_id}",
+        headers=headers_member,
+        json={"amount_cents": 3500, "notes": "Self correction"},
+    )
+    assert member_self_patch.status_code == 200
+    assert member_self_patch.json()["amount_cents"] == 3500
+
     # Admin deletes payment -> 204 No Content
     admin_del_pay = await client.delete(
         f"/api/v1/settlements/payments/{pay_id}",
@@ -424,4 +498,181 @@ async def test_settlement_deletion_and_rbac(client: AsyncClient):
         headers=headers_admin,
     )
     assert admin_del_waiver.status_code == 204
+
+    # Close cycle and verify modifications locked
+    await client.post(f"/api/v1/cycles/{cycle['id']}/close", headers=headers_admin)
+
+    closed_patch_pay = await client.patch(
+        f"/api/v1/settlements/payments/{member_pay_id}",
+        headers=headers_admin,
+        json={"amount_cents": 4000},
+    )
+    assert closed_patch_pay.status_code == 400
+    assert "CLOSED" in closed_patch_pay.json()["detail"]
+
+    closed_del_pay = await client.delete(
+        f"/api/v1/settlements/payments/{member_pay_id}",
+        headers=headers_admin,
+    )
+    assert closed_del_pay.status_code == 400
+    assert "CLOSED" in closed_del_pay.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_variable_recurring_template_workflow(client: AsyncClient):
+    # 1. Register Admin User
+    reg = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "variable_admin@example.com",
+            "password": "Password123!",
+            "full_name": "Alice Admin",
+        },
+    )
+    auth_data = reg.json()
+    household_id = auth_data["households"][0]["household_id"]
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "variable_admin@example.com", "password": "Password123!"},
+    )
+    token = login.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Add second resident: Bob
+    bob_resp = await client.post(
+        f"/api/v1/households/{household_id}/persons",
+        json={"name": "Bob Roommate"},
+        headers=headers,
+    )
+    bob_id = bob_resp.json()["id"]
+
+    persons_resp = await client.get(
+        f"/api/v1/households/{household_id}/persons",
+        headers=headers,
+    )
+    all_persons = persons_resp.json()
+    alice_id = next(p["id"] for p in all_persons if p["name"] == "Alice Admin")
+
+    # 2. Create a Variable Recurring Template with PERCENTAGE split (Alice 60%, Bob 40%)
+    tpl_resp = await client.post(
+        f"/api/v1/fixed-templates?household_id={household_id}",
+        json={
+            "title": "Electricity Bill",
+            "recurrence_type": "VARIABLE",
+            "due_day": 10,
+            "category": "Utilities",
+            "is_active": True,
+            "split_type": "PERCENTAGE",
+            "split_config": {
+                "participant_ids": [alice_id, bob_id],
+                "percentages": {alice_id: 60.0, bob_id: 40.0},
+            },
+        },
+        headers=headers,
+    )
+    assert tpl_resp.status_code == 201
+    tpl_id = tpl_resp.json()["id"]
+
+    # 3. Create Billing Cycle for 2026-10
+    cycle_resp = await client.post(
+        "/api/v1/cycles",
+        json={"household_id": household_id, "year": 2026, "month": 10},
+        headers=headers,
+    )
+    assert cycle_resp.status_code == 201
+    cycle_id = cycle_resp.json()["id"]
+
+    # 4. Fetch cycle report - verify expense was created as PENDING_VALUE with $0
+    report_resp = await client.get(
+        f"/api/v1/reports/current-cycle?cycle_id={cycle_id}",
+        headers=headers,
+    )
+    assert report_resp.status_code == 200
+    report = report_resp.json()
+    assert len(report["expenses"]) == 1
+    pending_exp = report["expenses"][0]
+    assert pending_exp["title"] == "Electricity Bill"
+    assert pending_exp["status"] == "PENDING_VALUE"
+    assert pending_exp["total_amount_cents"] == 0
+    assert pending_exp["template_id"] == tpl_id
+    assert len(pending_exp["splits"]) == 0
+
+    # 5. Attempt to close cycle while expense is PENDING_VALUE -> should fail 400
+    close_attempt = await client.post(
+        f"/api/v1/cycles/{cycle_id}/close",
+        headers=headers,
+    )
+    assert close_attempt.status_code == 400
+    assert "pending recurring expenses" in close_attempt.json()["detail"]
+
+    # 6. Bill arrives! Set actual amount via PATCH /expenses/{id}/amount: $150.00 (15000 cents)
+    set_amt_resp = await client.patch(
+        f"/api/v1/expenses/{pending_exp['id']}/amount",
+        json={"actual_amount_cents": 15000, "update_template_default": True},
+        headers=headers,
+    )
+    assert set_amt_resp.status_code == 200
+    updated_exp = set_amt_resp.json()
+    assert updated_exp["status"] == "READY"
+    assert updated_exp["total_amount_cents"] == 15000
+    assert len(updated_exp["splits"]) == 2
+
+    alice_split = next(s for s in updated_exp["splits"] if s["person_id"] == alice_id)
+    bob_split = next(s for s in updated_exp["splits"] if s["person_id"] == bob_id)
+    assert alice_split["assigned_amount_cents"] == 9000  # 60% of 15000
+    assert bob_split["assigned_amount_cents"] == 6000    # 40% of 15000
+
+    # Verify template estimated_amount_cents was updated
+    tpl_check = await client.get(
+        f"/api/v1/fixed-templates?household_id={household_id}",
+        headers=headers,
+    )
+    fetched_tpl = next(t for t in tpl_check.json() if t["id"] == tpl_id)
+    assert fetched_tpl["estimated_amount_cents"] == 15000
+
+    # 7. Now cycle can be closed successfully
+    close_success = await client.post(
+        f"/api/v1/cycles/{cycle_id}/close",
+        headers=headers,
+    )
+    assert close_success.status_code == 200
+    assert close_success.json()["status"] == "CLOSED"
+
+    # 8. Test creating a Fixed Recurring Expense directly via POST /expenses
+    await client.post(f"/api/v1/cycles/{cycle_id}/reopen", headers=headers)
+
+    create_rec_exp = await client.post(
+        "/api/v1/expenses",
+        json={
+            "billing_cycle_id": cycle_id,
+            "title": "Gym Membership",
+            "total_amount_cents": 8000,
+            "category": "Other",
+            "due_date": "2026-10-05",
+            "split_type": "EQUAL",
+            "participant_ids": [alice_id, bob_id],
+            "recurrence_type": "FIXED",
+            "due_day": 5,
+        },
+        headers=headers,
+    )
+    assert create_rec_exp.status_code == 201
+    rec_exp_data = create_rec_exp.json()
+    assert rec_exp_data["is_fixed"] is True
+    assert rec_exp_data["status"] == "READY"
+    assert rec_exp_data["template_id"] is not None
+
+    # Check that a recurring template was created
+    tpl_list_resp = await client.get(
+        f"/api/v1/fixed-templates?household_id={household_id}",
+        headers=headers,
+    )
+    gym_tpl = next((t for t in tpl_list_resp.json() if t["title"] == "Gym Membership"), None)
+    assert gym_tpl is not None
+    assert gym_tpl["recurrence_type"] == "FIXED"
+    assert gym_tpl["estimated_amount_cents"] == 8000
+    assert gym_tpl["due_day"] == 5
+
+
 

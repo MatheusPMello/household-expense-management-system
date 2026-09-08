@@ -76,8 +76,8 @@ async def list_cycles(
     results = []
     for c in cycles:
         total_exp = sum(e.total_amount_cents for e in c.expenses)
-        total_paid_vendor = sum(
-            e.total_amount_cents for e in c.expenses if e.paid_to_vendor
+        total_paid = sum(
+            e.total_amount_cents for e in c.expenses if e.is_paid
         )
         total_collected = sum(p.amount_cents for p in c.payments)
         total_waived = sum(w.amount_cents for w in c.debt_waivers)
@@ -92,7 +92,7 @@ async def list_cycles(
                 closed_at=c.closed_at,
                 created_at=c.created_at,
                 total_expenses_cents=total_exp,
-                total_paid_to_vendor_cents=total_paid_vendor,
+                total_paid_cents=total_paid,
                 total_collected_cents=total_collected,
                 total_waived_cents=total_waived,
             )
@@ -113,8 +113,8 @@ async def _build_cycle_out(cycle_id: uuid.UUID, db: AsyncSession) -> BillingCycl
     cycle_full = (await db.execute(stmt)).scalar_one()
 
     total_exp = sum(e.total_amount_cents for e in cycle_full.expenses)
-    total_paid_vendor = sum(
-        e.total_amount_cents for e in cycle_full.expenses if e.paid_to_vendor
+    total_paid = sum(
+        e.total_amount_cents for e in cycle_full.expenses if e.is_paid
     )
     total_collected = sum(p.amount_cents for p in cycle_full.payments)
     total_waived = sum(w.amount_cents for w in cycle_full.debt_waivers)
@@ -128,7 +128,7 @@ async def _build_cycle_out(cycle_id: uuid.UUID, db: AsyncSession) -> BillingCycl
         closed_at=cycle_full.closed_at,
         created_at=cycle_full.created_at,
         total_expenses_cents=total_exp,
-        total_paid_to_vendor_cents=total_paid_vendor,
+        total_paid_cents=total_paid,
         total_collected_cents=total_collected,
         total_waived_cents=total_waived,
     )
@@ -166,6 +166,19 @@ async def close_cycle(
         )
 
     await check_admin_access(cycle.household_id, current_user.id, db)
+
+    # Ensure no expenses remain in PENDING_VALUE before closing the cycle
+    pending_stmt = select(Expense).where(
+        Expense.billing_cycle_id == cycle_id,
+        Expense.status == "PENDING_VALUE",
+    )
+    pending_expenses = (await db.execute(pending_stmt)).scalars().all()
+    if pending_expenses:
+        titles = ", ".join(f'"{e.title}"' for e in pending_expenses[:3])
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot close billing cycle with pending recurring expenses ({titles}). Please enter their actual invoice amounts or remove them before closing.",
+        )
 
     cycle.status = "CLOSED"
     cycle.closed_at = datetime.now(timezone.utc)

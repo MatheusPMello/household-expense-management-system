@@ -1,6 +1,6 @@
 # HomeLedger — Shared Household Expense Management System
 
-HomeLedger is a multi-tenant web application designed for managing, allocating, and auditing shared household expenses. Built with a focus on mathematical precision, security, and ledger-based accounting, the system handles recurring fixed expenses, ad-hoc variable costs, penny-perfect split algorithms, partial or full settlements, and audited debt forgiveness.
+HomeLedger is a multi-tenant web application designed for managing, allocating, and auditing shared household expenses. Built with a focus on mathematical precision, security, and ledger-based accounting, the system handles two-tier recurring expense templates (both fixed contracts and variable utility/condo bills), ad-hoc one-off costs, penny-perfect split algorithms, partial or full settlements, and audited debt forgiveness.
 
 ---
 
@@ -12,7 +12,7 @@ Shared living arrangements and multi-resident households frequently face account
 - **Unclear debt forgiveness:** Forgiven shortfalls or informal chore offsets are often deleted or untracked, distorting active monthly operations and erasing historical records.
 - **Cross-household isolation:** Shared setups require rigorous data isolation between households and distinct permission tiers for administrators versus standard residents.
 
-HomeLedger addresses these issues through strict integer-cent storage, a projection-based ledger model, deterministic penny-perfect split algorithms, and an immutable audit trail for concessions.
+HomeLedger addresses these issues through strict integer-cent storage, a projection-based ledger model, deterministic penny-perfect split algorithms, two-tier recurrence templates with dynamic monthly recalculation, and an immutable audit trail for concessions.
 
 ---
 
@@ -97,9 +97,9 @@ The application implements four deterministic split strategies that guarantee ze
          ├── users & refresh_tokens
          ├── households & household_members (RBAC)
          ├── persons (managed residents)
-         ├── fixed_expense_templates
+         ├── fixed_expense_templates (recurring templates: FIXED & VARIABLE with split configs)
          ├── billing_cycles
-         ├── expenses & expense_splits
+         ├── expenses & expense_splits (with lifecycle status: PENDING_VALUE, READY, SETTLED)
          ├── payments
          └── debt_waivers (audited log)
 ```
@@ -207,29 +207,40 @@ The frontend development server runs on `http://localhost:5173`.
 1. **User Registration:** Navigate to `/register`. Registering a new account automatically creates a primary household entity with the user assigned as `ADMIN`, and registers an initial resident profile.
 2. **Multi-Household Switching:** Users can belong to multiple households (e.g., apartment, holiday house). The dropdown in the navigation header allows switching between active contexts.
 
-### 6.2 Managing Residents and Recurring Templates
+### 6.2 Managing Residents and Recurring Expense Templates
 1. **Resident Directory:** Navigate to **Settings**. The administrator can register managed residents (`Person` entities). Residents can exist as standalone profiles (e.g., dependents, roommates without accounts) or be linked to registered user accounts.
-2. **Fixed Expense Templates:** Under **Settings**, configure recurring monthly obligations (e.g., Rent, Fiber Internet, Water). Each template defines an estimated amount in dollars and a designated due day of the month (1–31).
+2. **Recurring Expense Templates (Fixed & Variable):** Under **Settings**, configure recurring monthly obligations:
+   - **Fixed Recurring:** Set a contract amount (e.g., Rent, Fiber Internet) and due day (1–31). Generates ready bills with predetermined splits on each new cycle.
+   - **Variable Recurring:** For costs where the amount changes every month (e.g., Electricity, Water, HOA/Condo fees), set a due day and an optional estimated baseline. Instantiates monthly drafts awaiting the real invoice amount.
 3. **Member Invitations:** Household administrators can invite other registered users by email and assign their role (`ADMIN` or `MEMBER`).
 
 ### 6.3 Billing Cycles & Expense Splitting
-1. **Initializing a Billing Cycle:** On the **Current Cycle** dashboard, select **New Cycle**. Creating a cycle automatically instantiates active fixed templates into that cycle's expenses, split equally among active residents without penny loss.
-2. **Submitting Variable Expenses:** Navigate to **Expenses** or use quick actions to log ad-hoc costs (e.g., groceries, repairs).
-3. **Interactive Split Engine:** Choose the calculation method (`EQUAL`, `PERCENTAGE`, `EXACT`, `WEIGHTED`) and select participants. A real-time split preview displays the allocation breakdown down to the exact cent before submission.
-4. **Vendor Settlement Status:** Expenses support a `Paid to Vendor` toggle, enabling the household to track whether a utility bill has been settled directly with the vendor independently of internal resident collections.
+1. **Initializing a Billing Cycle:** On the **Current Cycle** dashboard, select **New Cycle**. Creating a cycle automatically instantiates active recurring templates:
+   - **Fixed Expenses:** Appear pre-filled with the contract amount, marked with `READY` status, and splits immediately allocated without penny loss.
+   - **Variable Expenses:** Appear with an amber `Awaiting Bill` badge (`PENDING_VALUE` status, $0.00), reserving the expense item without prematurely assigning unbilled liabilities to residents.
+2. **Registering Expenses (Modal Workflow):** Navigate to **Expenses** and click **+ Add Expense**. Select the expense nature:
+   - **One-off (Single):** Single expense with immediate due date and amount for the active cycle only.
+   - **Fixed Recurring:** Contract amount and recurring due day; creates an active template repeating automatically every cycle.
+   - **Variable Recurring:** Recurring due day, optional estimated baseline, and split rules; creates an active template and a pending draft in the active cycle.
+3. **Confirming Variable Invoices & Dynamic Split Recalculation:** When the monthly utility or condo invoice arrives, click **Enter Bill** on the table row (or open the micro-modal):
+   - Enter the actual invoice amount.
+   - Optionally toggle *"Update recurring template default estimated amount for future months"* if the contractual baseline has changed.
+   - Click **Confirm & Recalculate Split**: The split engine automatically distributes the bill across participating residents using the assigned formula (`EQUAL`, `PERCENTAGE`, `WEIGHTED`) down to the exact integer cent, transitions the expense status to `READY`, and updates resident balances without manual arithmetic.
+4. **Interactive Split Engine:** Choose the calculation method (`EQUAL`, `PERCENTAGE`, `EXACT`, `WEIGHTED`) and select participants. A real-time split preview displays the allocation breakdown down to the exact cent before submission.
+5. **Expense Settlement Status:** Expenses support a `Paid` toggle, enabling the household to track whether a utility bill or invoice has been settled externally independently of internal resident collections.
 
 ### 6.4 Settlements & Audited Debt Waivers
 1. **Recording Resident Payments:** Click **+ Record Payment** on any resident card. Enter the amount settled and optional reference notes. The resident's remaining balance updates immediately.
 2. **Granting Audited Debt Waivers:** When a resident's balance is forgiven (e.g., labor offset, mutual agreement), an administrator can click **Waive Amount**. Entering an audited reason is mandatory. The amount is credited against the current operational cycle while preserving an entry in the historical ledger.
 
 ### 6.5 Consolidated Reporting & Cycle Closure
-1. **Current Cycle Dashboard:** Provides an operational view of total budget, vendor disbursements, collections received, and individual resident balances (`Settled`, `Owed`, or `Credit`).
+1. **Current Cycle Dashboard:** Provides an operational view of total budget, settled expenses, collections received, and individual resident balances (`Settled`, `Owed`, or `Credit`).
 2. **General Balance & Historical Audit:**
    - **Debt Waiver Ledger:** Comprehensive table displaying all historical waivers across cycles, including date, participant, amount, and audited reason.
    - **Resident Compliance Rate:** Tracks long-term contribution compliance:
      $$\text{Compliance Rate} = \frac{\sum P_p}{\sum D_p} \times 100\%$$
    - **Cost Trajectory:** Visual representation comparing monthly fixed vs. variable spending trends over time.
-3. **Closing a Cycle:** Once a billing period concludes, administrators can click **Close Cycle**. This action locks the cycle, preventing further expense creation, payments, or modifications unless reopened.
+3. **Closing a Cycle:** Once a billing period concludes, administrators can click **Close Cycle**. This action locks the cycle, preventing further expense creation, payments, or modifications unless reopened. The system enforces a strict accounting safety check: cycles cannot be closed while any recurring expenses remain in `PENDING_VALUE` (`Awaiting Bill`), ensuring all household liabilities are accounted for.
 
 ---
 
@@ -248,6 +259,8 @@ pytest -v
 **Test Coverage Areas:**
 - `test_split_engine.py`: Equal splits with prime cents remainders, percentage rounding residuals, exact sum validation, and weighted splits.
 - `test_auth_and_rbac.py`: Registration, authentication, token rotation, revoked token rejection, and cross-household data isolation.
+- `test_cycles_and_ledger.py`: Full cycle lifecycle, template auto-instantiation (fixed and variable), dynamic split recalculation, waiver ledger audit trail, and cycle lock safety.
+
 ### 7.2 Frontend Type Checking & Build Verification
 Verify TypeScript compilation and Vite production bundling from the `frontend/` directory:
 
@@ -287,15 +300,18 @@ All protected endpoints require the `Authorization: Bearer <access_token>` heade
 | `POST` | `/api/v1/households/{id}/members` | Admin | Invite/add a registered user to the household |
 | `GET` | `/api/v1/households/{id}/persons` | Member | List managed residents in the household |
 | `POST` | `/api/v1/households/{id}/persons` | Member | Register a resident in the household |
-| `GET` | `/api/v1/fixed-templates` | Member | List recurring fixed expense templates |
-| `POST` | `/api/v1/fixed-templates` | Admin | Create recurring fixed expense template |
+| `GET` | `/api/v1/fixed-templates` | Member | List recurring expense templates (fixed contract amounts or variable bills) |
+| `POST` | `/api/v1/fixed-templates` | Admin | Create recurring expense template (`FIXED` or `VARIABLE`) with split config |
+| `PUT` | `/api/v1/fixed-templates/{id}` | Admin | Update recurring template rules, amounts, or active status |
+| `DELETE` | `/api/v1/fixed-templates/{id}` | Admin | Delete recurring expense template |
 | `GET` | `/api/v1/cycles` | Member | List billing cycles with year/month filtering |
 | `POST` | `/api/v1/cycles` | Admin | Initialize cycle and instantiate recurring templates |
-| `POST` | `/api/v1/cycles/{id}/close` | Admin | Close and lock billing cycle against modifications |
+| `POST` | `/api/v1/cycles/{id}/close` | Admin | Close and lock billing cycle (requires all pending bills to be resolved) |
 | `POST` | `/api/v1/cycles/{id}/reopen` | Admin | Reopen a closed billing cycle |
-| `POST` | `/api/v1/expenses` | Member | Create expense with penny-perfect split calculation |
+| `POST` | `/api/v1/expenses` | Member | Create expense (single or recurring) with penny-perfect split calculation |
 | `PUT` | `/api/v1/expenses/{id}` | Member | Update expense details and recalculate splits |
-| `PATCH`| `/api/v1/expenses/{id}/vendor-status`| Member | Toggle vendor payment settlement flag |
+| `PATCH`| `/api/v1/expenses/{id}/amount` | Member | Set actual invoice amount on recurring bill and recalculate splits |
+| `PATCH`| `/api/v1/expenses/{id}/payment-status`| Member | Toggle external payment settlement flag |
 | `DELETE`| `/api/v1/expenses/{id}` | Member | Delete expense from an open billing cycle |
 | `POST` | `/api/v1/settlements/payments` | Member | Record resident contribution payment |
 | `POST` | `/api/v1/settlements/waivers` | Admin | Record audited debt waiver with mandatory reason |

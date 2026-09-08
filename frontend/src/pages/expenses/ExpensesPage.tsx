@@ -7,6 +7,7 @@ import {
   Expense,
   Person,
   SplitType,
+  RecurrenceOption,
 } from '../../types';
 import {
   formatCentsToCurrency,
@@ -23,6 +24,7 @@ import {
   AlertCircle,
   Calculator,
   Users,
+  DollarSign,
 } from 'lucide-react';
 
 export const ExpensesPage: React.FC = () => {
@@ -37,8 +39,15 @@ export const ExpensesPage: React.FC = () => {
   const [totalAmountStr, setTotalAmountStr] = useState('');
   const [category, setCategory] = useState('Groceries');
   const [dueDate, setDueDate] = useState(new Date().toISOString().split('T')[0]);
-  const [isFixed, setIsFixed] = useState(false);
+  const [dueDay, setDueDay] = useState(1);
+  const [recurrenceOption, setRecurrenceOption] = useState<RecurrenceOption>('ONE_OFF');
   const [splitType, setSplitType] = useState<SplitType>('EQUAL');
+
+  // Micro-modal state for entering actual bill amount
+  const [pendingExpenseToSet, setPendingExpenseToSet] = useState<Expense | null>(null);
+  const [enterAmountStr, setEnterAmountStr] = useState('');
+  const [updateTemplateDefault, setUpdateTemplateDefault] = useState(false);
+  const [enterAmountError, setEnterAmountError] = useState('');
 
   // Participants selection & distribution inputs
   const [selectedPersonIds, setSelectedPersonIds] = useState<string[]>([]);
@@ -215,18 +224,33 @@ export const ExpensesPage: React.FC = () => {
     mutationFn: async () => {
       if (!activeCycle) throw new Error('No cycle selected.');
       const cents = parseCurrencyToCents(totalAmountStr);
-      if (cents <= 0) throw new Error('Amount must be greater than zero.');
-      if (selectedPersonIds.length === 0)
+      if (recurrenceOption !== 'VARIABLE' && cents <= 0) {
+        throw new Error('Amount must be greater than zero.');
+      }
+      if (selectedPersonIds.length === 0) {
         throw new Error('At least one participant must be selected.');
+      }
+
+      let finalDueDate = dueDate;
+      if (recurrenceOption !== 'ONE_OFF') {
+        const safeDay = Math.min(Math.max(dueDay, 1), 28);
+        const y = activeCycle.year;
+        const m = String(activeCycle.month).padStart(2, '0');
+        const d = String(safeDay).padStart(2, '0');
+        finalDueDate = `${y}-${m}-${d}`;
+      }
 
       const payload: any = {
         billing_cycle_id: activeCycle.id,
         title: title.trim(),
-        total_amount_cents: cents,
-        is_fixed: isFixed,
+        total_amount_cents: cents > 0 ? cents : 0,
+        is_fixed: recurrenceOption === 'FIXED',
         category: category.trim(),
-        due_date: dueDate,
+        due_date: finalDueDate,
         split_type: splitType,
+        recurrence_type: recurrenceOption,
+        due_day: dueDay,
+        status: recurrenceOption === 'VARIABLE' && cents <= 0 ? 'PENDING_VALUE' : 'READY',
       };
 
       if (splitType === 'EQUAL') {
@@ -258,11 +282,38 @@ export const ExpensesPage: React.FC = () => {
       setTitle('');
       setTotalAmountStr('');
       setFormError('');
+      setRecurrenceOption('ONE_OFF');
+      setDueDay(1);
       queryClient.invalidateQueries({ queryKey: ['cycle-report', activeCycle?.id] });
       queryClient.invalidateQueries({ queryKey: ['cycles', activeHousehold?.household_id] });
+      queryClient.invalidateQueries({ queryKey: ['fixed-templates', activeHousehold?.household_id] });
     },
     onError: (err: any) => {
       setFormError(err.response?.data?.detail || err.message);
+    },
+  });
+
+  const setExpenseAmount = useMutation({
+    mutationFn: async () => {
+      if (!pendingExpenseToSet) return;
+      const cents = parseCurrencyToCents(enterAmountStr);
+      if (cents <= 0) throw new Error('Invoice amount must be greater than zero.');
+      await api.patch(`/expenses/${pendingExpenseToSet.id}/amount`, {
+        actual_amount_cents: cents,
+        update_template_default: updateTemplateDefault,
+      });
+    },
+    onSuccess: () => {
+      setPendingExpenseToSet(null);
+      setEnterAmountStr('');
+      setEnterAmountError('');
+      setUpdateTemplateDefault(false);
+      queryClient.invalidateQueries({ queryKey: ['cycle-report', activeCycle?.id] });
+      queryClient.invalidateQueries({ queryKey: ['cycles', activeHousehold?.household_id] });
+      queryClient.invalidateQueries({ queryKey: ['fixed-templates', activeHousehold?.household_id] });
+    },
+    onError: (err: any) => {
+      setEnterAmountError(err.response?.data?.detail || err.message);
     },
   });
 
@@ -361,7 +412,8 @@ export const ExpensesPage: React.FC = () => {
                   <th className="px-6 py-3">Due Date</th>
                   <th className="px-6 py-3">Total Amount</th>
                   <th className="px-6 py-3">Split Method</th>
-                  <th className="px-6 py-3">Vendor Settlement</th>
+                  <th className="px-6 py-3">Status</th>
+                  <th className="px-6 py-3">Payment Status</th>
                   <th className="px-6 py-3 text-right">Actions</th>
                 </tr>
               </thead>
@@ -371,11 +423,15 @@ export const ExpensesPage: React.FC = () => {
                     <td className="px-6 py-4 font-semibold text-slate-900">
                       <div className="flex items-center space-x-2">
                         <span>{e.title}</span>
-                        {e.is_fixed && (
+                        {e.is_fixed ? (
                           <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-semibold uppercase">
                             Fixed
                           </span>
-                        )}
+                        ) : e.template_id ? (
+                          <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-semibold uppercase">
+                            Recurring
+                          </span>
+                        ) : null}
                       </div>
                     </td>
                     <td className="px-6 py-4 text-slate-600">
@@ -387,34 +443,60 @@ export const ExpensesPage: React.FC = () => {
                       {formatDate(e.due_date)}
                     </td>
                     <td className="px-6 py-4 font-bold text-slate-900">
-                      {formatCentsToCurrency(e.total_amount_cents)}
+                      {e.status === 'PENDING_VALUE' ? (
+                        <span className="text-amber-600 font-semibold italic text-xs bg-amber-50 px-2 py-1 rounded border border-amber-200">
+                          Awaiting Bill
+                        </span>
+                      ) : (
+                        formatCentsToCurrency(e.total_amount_cents)
+                      )}
                     </td>
                     <td className="px-6 py-4">
                       <StatusBadge type="split" value={e.split_type} />
                     </td>
                     <td className="px-6 py-4">
+                      <StatusBadge type="expense_status" value={e.status} />
+                    </td>
+                    <td className="px-6 py-4">
                       <StatusBadge
-                        type="vendor"
-                        value={e.paid_to_vendor ? 'Paid' : 'Pending'}
+                        type="payment"
+                        value={e.is_paid ? 'Paid' : 'Pending'}
                       />
                     </td>
                     <td className="px-6 py-4 text-right">
                       {activeCycle?.status === 'OPEN' && (
-                        <button
-                          onClick={() => {
-                            if (
-                              confirm(
-                                `Are you sure you want to delete expense "${e.title}"?`
-                              )
-                            ) {
-                              deleteExpense.mutate(e.id);
-                            }
-                          }}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors"
-                          title="Delete expense"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        <div className="flex items-center justify-end space-x-2">
+                          {e.status === 'PENDING_VALUE' && (
+                            <button
+                              onClick={() => {
+                                setPendingExpenseToSet(e);
+                                setEnterAmountStr('');
+                                setUpdateTemplateDefault(false);
+                                setEnterAmountError('');
+                              }}
+                              className="inline-flex items-center space-x-1 px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors"
+                              title="Enter bill amount & calculate splits"
+                            >
+                              <DollarSign className="w-3.5 h-3.5" />
+                              <span>Enter Bill</span>
+                            </button>
+                          )}
+                          <button
+                            onClick={() => {
+                              if (
+                                confirm(
+                                  `Are you sure you want to delete expense "${e.title}"?`
+                                )
+                              ) {
+                                deleteExpense.mutate(e.id);
+                              }
+                            }}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors"
+                            title="Delete expense"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -456,28 +538,11 @@ export const ExpensesPage: React.FC = () => {
                 required
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="e.g. Front Gate Repair, WiFi"
+                placeholder="e.g. HOA Fee, Electricity Bill, WiFi"
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-800 focus:bg-white focus:ring-2 focus:ring-emerald-500"
               />
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                Total Amount ($)
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                required
-                value={totalAmountStr}
-                onChange={(e) => setTotalAmountStr(e.target.value)}
-                placeholder="120.00"
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-800 focus:bg-white focus:ring-2 focus:ring-emerald-500"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                 Category
@@ -489,39 +554,138 @@ export const ExpensesPage: React.FC = () => {
               >
                 <option value="Groceries">Groceries</option>
                 <option value="Utilities">Utilities</option>
+                <option value="Housing">Housing & Rent</option>
+                <option value="Condo">HOA / Condo Fee</option>
                 <option value="Maintenance">Maintenance</option>
                 <option value="Internet">Internet & Tech</option>
                 <option value="Cleaning">Cleaning & Supplies</option>
                 <option value="Other">Other</option>
               </select>
             </div>
+          </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                Due Date
-              </label>
-              <input
-                type="date"
-                required
-                value={dueDate}
-                onChange={(e) => setDueDate(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm"
-              />
+          {/* Recurrence Nature: One-off, Fixed Recurring, Variable Recurring */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
+              Expense Nature & Recurrence
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => setRecurrenceOption('ONE_OFF')}
+                className={`p-3 rounded-lg border text-left transition-all ${
+                  recurrenceOption === 'ONE_OFF'
+                    ? 'border-emerald-600 bg-emerald-50 text-emerald-900 ring-2 ring-emerald-500/20'
+                    : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+                }`}
+              >
+                <div className="text-xs font-bold">One-off (Single)</div>
+                <div className="text-[11px] text-slate-500 mt-0.5 leading-tight">
+                  Single expense for current cycle only
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setRecurrenceOption('FIXED')}
+                className={`p-3 rounded-lg border text-left transition-all ${
+                  recurrenceOption === 'FIXED'
+                    ? 'border-emerald-600 bg-emerald-50 text-emerald-900 ring-2 ring-emerald-500/20'
+                    : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+                }`}
+              >
+                <div className="text-xs font-bold">Fixed Recurring</div>
+                <div className="text-[11px] text-slate-500 mt-0.5 leading-tight">
+                  Repeats same contract amount monthly
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setRecurrenceOption('VARIABLE');
+                  if (splitType === 'EXACT') setSplitType('EQUAL');
+                }}
+                className={`p-3 rounded-lg border text-left transition-all ${
+                  recurrenceOption === 'VARIABLE'
+                    ? 'border-emerald-600 bg-emerald-50 text-emerald-900 ring-2 ring-emerald-500/20'
+                    : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+                }`}
+              >
+                <div className="text-xs font-bold">Variable Recurring</div>
+                <div className="text-[11px] text-slate-500 mt-0.5 leading-tight">
+                  Bill amount varies and is entered each cycle
+                </div>
+              </button>
             </div>
           </div>
 
-          <div className="flex items-center space-x-2">
-            <input
-              type="checkbox"
-              id="isFixedCheckbox"
-              checked={isFixed}
-              onChange={(e) => setIsFixed(e.target.checked)}
-              className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4"
-            />
-            <label htmlFor="isFixedCheckbox" className="text-xs font-medium text-slate-700 cursor-pointer">
-              Mark as Fixed Recurring Expense (e.g. Monthly utility contract)
-            </label>
+          {/* Conditional Amount & Date fields based on Recurrence Option */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                {recurrenceOption === 'VARIABLE'
+                  ? 'Estimated Amount / Average ($) (Optional)'
+                  : 'Total Amount ($)'}
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                required={recurrenceOption !== 'VARIABLE'}
+                value={totalAmountStr}
+                onChange={(e) => setTotalAmountStr(e.target.value)}
+                placeholder={recurrenceOption === 'VARIABLE' ? 'e.g. 150.00 (optional)' : '120.00'}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-800 focus:bg-white focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+
+            <div>
+              {recurrenceOption === 'ONE_OFF' ? (
+                <>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                    Due Date
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={dueDate}
+                    onChange={(e) => setDueDate(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm"
+                  />
+                </>
+              ) : (
+                <>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                    Recurring Due Day (Day of Month)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={31}
+                    required
+                    value={dueDay}
+                    onChange={(e) => setDueDay(parseInt(e.target.value) || 1)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm"
+                  />
+                </>
+              )}
+            </div>
           </div>
+
+          {recurrenceOption === 'VARIABLE' && (
+            <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg text-xs flex items-start space-x-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-600" />
+              <span>
+                <strong>Variable Recurring Expense:</strong> A draft will be created each month. The actual invoice amount will be requested at each cycle before finalizing the split.
+              </span>
+            </div>
+          )}
+
+          {recurrenceOption === 'FIXED' && (
+            <div className="p-2.5 bg-slate-50 border border-slate-200 text-slate-600 rounded-lg text-xs">
+              This fixed contract bill will automatically repeat with this amount across upcoming monthly cycles.
+            </div>
+          )}
 
           {/* Split Type Selector */}
           <div>
@@ -529,8 +693,9 @@ export const ExpensesPage: React.FC = () => {
               Split Engine Algorithm
             </label>
             <div className="grid grid-cols-4 gap-2">
-              {(['EQUAL', 'PERCENTAGE', 'EXACT', 'WEIGHTED'] as SplitType[]).map(
-                (type) => (
+              {(['EQUAL', 'PERCENTAGE', 'EXACT', 'WEIGHTED'] as SplitType[])
+                .filter((type) => recurrenceOption !== 'VARIABLE' || type !== 'EXACT')
+                .map((type) => (
                   <button
                     key={type}
                     type="button"
@@ -543,8 +708,7 @@ export const ExpensesPage: React.FC = () => {
                   >
                     {type}
                   </button>
-                )
-              )}
+                ))}
             </div>
           </div>
 
@@ -701,6 +865,103 @@ export const ExpensesPage: React.FC = () => {
               className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg shadow-sm disabled:opacity-50"
             >
               {createExpense.isPending ? 'Splitting...' : 'Create & Split Expense'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Micro-Modal: Enter Bill Amount for Variable Recurring Expenses */}
+      <Modal
+        isOpen={!!pendingExpenseToSet}
+        onClose={() => setPendingExpenseToSet(null)}
+        title={pendingExpenseToSet ? `Enter Bill: ${pendingExpenseToSet.title}` : 'Enter Bill Amount'}
+        maxWidth="md"
+      >
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            setExpenseAmount.mutate();
+          }}
+          className="space-y-4"
+        >
+          {enterAmountError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg flex items-center space-x-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <span>{enterAmountError}</span>
+            </div>
+          )}
+
+          <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs space-y-1.5">
+            <div className="flex justify-between">
+              <span className="text-slate-500 font-medium">Billing Cycle:</span>
+              <span className="text-slate-800 font-semibold">
+                {activeCycle ? `${getMonthName(activeCycle.month)} ${activeCycle.year}` : ''}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-500 font-medium">Category:</span>
+              <span className="text-slate-800 font-semibold">{pendingExpenseToSet?.category}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-500 font-medium">Assigned Split Rule:</span>
+              <span className="text-slate-800 font-semibold">{pendingExpenseToSet?.split_type} Split</span>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+              New Invoice Amount ($)
+            </label>
+            <div className="relative">
+              <input
+                type="number"
+                step="0.01"
+                min="0.01"
+                required
+                autoFocus
+                value={enterAmountStr}
+                onChange={(e) => setEnterAmountStr(e.target.value)}
+                placeholder="e.g. 145.50"
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-800 focus:bg-white focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+            <p className="text-[11px] text-slate-500 mt-1">
+              The assigned split rule will automatically be applied to this bill across participants.
+            </p>
+          </div>
+
+          {pendingExpenseToSet?.template_id && (
+            <div className="flex items-start space-x-2 pt-1">
+              <input
+                type="checkbox"
+                id="updateTemplateDefaultCheckbox"
+                checked={updateTemplateDefault}
+                onChange={(e) => setUpdateTemplateDefault(e.target.checked)}
+                className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4 mt-0.5"
+              />
+              <label
+                htmlFor="updateTemplateDefaultCheckbox"
+                className="text-xs text-slate-700 cursor-pointer select-none"
+              >
+                Update recurring template default estimated amount for future months
+              </label>
+            </div>
+          )}
+
+          <div className="flex justify-end space-x-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setPendingExpenseToSet(null)}
+              className="px-4 py-2 border border-slate-300 text-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={setExpenseAmount.isPending}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold shadow-xs disabled:opacity-50"
+            >
+              {setExpenseAmount.isPending ? 'Calculating...' : 'Confirm & Recalculate Split'}
             </button>
           </div>
         </form>

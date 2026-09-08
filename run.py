@@ -138,6 +138,13 @@ def cmd_start():
         cmd_setup()
 
     log("Starting HomeLedger Development Stack...")
+    log("Applying latest database migrations with Alembic...")
+    subprocess.run(
+        [str(VENV_ALEMBIC), "upgrade", "head"],
+        cwd=str(BACKEND_DIR),
+        check=True,
+    )
+
     log("Backend:", "http://localhost:8000  (API Docs: http://localhost:8000/docs)")
     log("Frontend:", "http://localhost:5173")
     print("\nPress Ctrl+C to terminate both servers.\n")
