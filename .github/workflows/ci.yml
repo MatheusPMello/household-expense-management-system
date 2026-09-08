@@ -1,0 +1,133 @@
+name: CI / CD Pipeline - Quality Gate & Verification
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Backend Testing & Algorithmic Coverage
+  # ---------------------------------------------------------------------------
+  backend-test:
+    name: Backend Pytest & Coverage
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest-cov
+
+      - name: Verify Alembic Migrations
+        run: |
+          alembic upgrade head
+
+      - name: Run Automated Pytest Suite
+        run: |
+          pytest -v --cov=app --cov-report=term --cov-report=xml
+
+      - name: Upload Backend Coverage Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-coverage-report
+          path: backend/coverage.xml
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # 2. Frontend Typecheck, Lint & Production Build
+  # ---------------------------------------------------------------------------
+  frontend-check:
+    name: Frontend Typecheck & Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package.json
+
+      - name: Install NPM Dependencies
+        run: |
+          npm install
+
+      - name: Run TypeScript Typecheck
+        run: |
+          npm run lint
+
+      - name: Build Production Distribution
+        run: |
+          npm run build
+
+      - name: Upload Frontend Production Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # 3. Docker Container Build Verification
+  # ---------------------------------------------------------------------------
+  docker-verify:
+    name: Docker Compose Build Verification
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker Compose Stack
+        run: |
+          docker compose build
+
+  # ---------------------------------------------------------------------------
+  # 4. Mandatory CI Quality Gate
+  # ---------------------------------------------------------------------------
+  quality-gate:
+    name: CI Quality Gate (Deploy Block)
+    needs: [backend-test, frontend-check, docker-verify]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Verification Summary
+        run: |
+          echo "========================================================"
+          echo " All quality gates passed successfully!"
+          echo " - Backend: Pytest suite & penny-perfect splits verified"
+          echo " - Frontend: TypeScript compilation & Vite build verified"
+          echo " - Docker: Multi-container images built without errors"
+          echo "========================================================"
+          echo "Ready for deployment / merge." >> $GITHUB_STEP_SUMMARY
