@@ -12,6 +12,9 @@ if TYPE_CHECKING:
     from app.models.cycle import BillingCycle
 
 
+CASCADE_ALL_DELETE_ORPHAN = "all, delete-orphan"
+
+
 class Household(Base):
     __tablename__ = "households"
 
@@ -24,16 +27,16 @@ class Household(Base):
     )
 
     members: Mapped[List["HouseholdMember"]] = relationship(
-        "HouseholdMember", back_populates="household", cascade="all, delete-orphan"
+        "HouseholdMember", back_populates="household", cascade=CASCADE_ALL_DELETE_ORPHAN
     )
     persons: Mapped[List["Person"]] = relationship(
-        "Person", back_populates="household", cascade="all, delete-orphan"
+        "Person", back_populates="household", cascade=CASCADE_ALL_DELETE_ORPHAN
     )
     fixed_templates: Mapped[List["FixedExpenseTemplate"]] = relationship(
-        "FixedExpenseTemplate", back_populates="household", cascade="all, delete-orphan"
+        "FixedExpenseTemplate", back_populates="household", cascade=CASCADE_ALL_DELETE_ORPHAN
     )
     billing_cycles: Mapped[List["BillingCycle"]] = relationship(
-        "BillingCycle", back_populates="household", cascade="all, delete-orphan"
+        "BillingCycle", back_populates="household", cascade=CASCADE_ALL_DELETE_ORPHAN
     )
 
 

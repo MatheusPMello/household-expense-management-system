@@ -18,6 +18,8 @@ from app.schemas.person import PersonCreate, PersonOut
 
 router = APIRouter(prefix="/households", tags=["Households & Residents"])
 
+NOT_MEMBER_ERROR = "Access denied. You are not a member of this household."
+
 
 @router.post("", response_model=HouseholdOut, status_code=status.HTTP_201_CREATED)
 async def create_household(
@@ -70,7 +72,7 @@ async def get_household(
     if not membership:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. You are not a member of this household.",
+            detail=NOT_MEMBER_ERROR,
         )
 
     return HouseholdOut(
@@ -95,7 +97,7 @@ async def list_household_members(
     if not (await db.execute(check_stmt)).scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. You are not a member of this household.",
+            detail=NOT_MEMBER_ERROR,
         )
 
     stmt = (
@@ -234,7 +236,7 @@ async def list_household_persons(
     if not (await db.execute(check_stmt)).scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. You are not a member of this household.",
+            detail=NOT_MEMBER_ERROR,
         )
 
     stmt = (

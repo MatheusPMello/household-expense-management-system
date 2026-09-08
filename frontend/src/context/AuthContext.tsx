@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { User, HouseholdMembership } from '../types';
@@ -23,7 +23,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [activeHousehold, setActiveHousehold] = useState<HouseholdMembership | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  const refreshUser = async () => {
+  const refreshUser = useCallback(async () => {
     try {
       const resp = await api.get<User>('/auth/me');
       const userData = resp.data;
@@ -49,7 +49,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     const token = localStorage.getItem('homeledger_access_token');
@@ -58,19 +58,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } else {
       setIsLoading(false);
     }
-  }, []);
+  }, [refreshUser]);
 
-  const login = async (tokens: { access_token: string; refresh_token: string }) => {
+  const login = useCallback(async (tokens: { access_token: string; refresh_token: string }) => {
     localStorage.setItem('homeledger_access_token', tokens.access_token);
     localStorage.setItem('homeledger_refresh_token', tokens.refresh_token);
     await refreshUser();
-  };
+  }, [refreshUser]);
 
-  const register = async (tokens: { access_token: string; refresh_token: string }) => {
+  const register = useCallback(async (tokens: { access_token: string; refresh_token: string }) => {
     await login(tokens);
-  };
+  }, [login]);
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     try {
       const refreshToken = localStorage.getItem('homeledger_refresh_token');
       if (refreshToken) {
@@ -86,9 +86,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setActiveHousehold(null);
       queryClient.clear();
     }
-  };
+  }, [queryClient]);
 
-  const switchHousehold = (householdId: string) => {
+  const switchHousehold = useCallback((householdId: string) => {
     if (!user) return;
     const found = user.households.find((h) => h.household_id === householdId);
     if (found) {
@@ -96,22 +96,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.setItem('homeledger_active_household_id', found.household_id);
       queryClient.clear();
     }
-  };
+  }, [user, queryClient]);
+
+  const contextValue = useMemo(
+    () => ({
+      user,
+      activeHousehold,
+      isAuthenticated: !!user,
+      isLoading,
+      login,
+      register,
+      logout,
+      switchHousehold,
+      refreshUser,
+    }),
+    [user, activeHousehold, isLoading, login, register, logout, switchHousehold, refreshUser]
+  );
 
   return (
-    <AuthContext.Provider
-      value={{
-        user,
-        activeHousehold,
-        isAuthenticated: !!user,
-        isLoading,
-        login,
-        register,
-        logout,
-        switchHousehold,
-        refreshUser,
-      }}
-    >
+    <AuthContext.Provider value={contextValue}>
       {children}
     </AuthContext.Provider>
   );

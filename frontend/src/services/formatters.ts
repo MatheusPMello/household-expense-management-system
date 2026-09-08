@@ -15,8 +15,8 @@ export function parseCurrencyToCents(amountStr: string): number {
   if (!amountStr) return 0;
   // Remove non-numeric except dot and minus
   const cleaned = amountStr.replace(/[^0-9.-]/g, '');
-  const parsed = parseFloat(cleaned);
-  if (isNaN(parsed)) return 0;
+  const parsed = Number.parseFloat(cleaned);
+  if (Number.isNaN(parsed)) return 0;
   return Math.round(parsed * 100);
 }
 

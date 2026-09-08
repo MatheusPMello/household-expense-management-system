@@ -922,12 +922,13 @@ export const DashboardPage: React.FC = () => {
           )}
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+            <label htmlFor="dashboard-payment-amount" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
               Payment Amount ($)
             </label>
             <div className="relative">
               <DollarSign className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
+                id="dashboard-payment-amount"
                 type="number"
                 step="0.01"
                 required
@@ -943,10 +944,11 @@ export const DashboardPage: React.FC = () => {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+            <label htmlFor="dashboard-payment-notes" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
               Notes (Optional)
             </label>
             <input
+              id="dashboard-payment-notes"
               type="text"
               value={paymentNotes}
               onChange={(e) => setPaymentNotes(e.target.value)}
@@ -995,12 +997,13 @@ export const DashboardPage: React.FC = () => {
           )}
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+            <label htmlFor="dashboard-waiver-amount" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
               Amount to Waive ($)
             </label>
             <div className="relative">
               <DollarSign className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
+                id="dashboard-waiver-amount"
                 type="number"
                 step="0.01"
                 required
@@ -1013,10 +1016,11 @@ export const DashboardPage: React.FC = () => {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+            <label htmlFor="dashboard-waiver-reason" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
               Mandatory Audit Reason
             </label>
             <textarea
+              id="dashboard-waiver-reason"
               required
               rows={3}
               value={waiverReason}
@@ -1070,10 +1074,11 @@ export const DashboardPage: React.FC = () => {
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+              <label htmlFor="dashboard-cycle-year" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                 Year
               </label>
               <input
+                id="dashboard-cycle-year"
                 type="number"
                 required
                 min={2020}
@@ -1084,10 +1089,11 @@ export const DashboardPage: React.FC = () => {
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+              <label htmlFor="dashboard-cycle-month" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                 Month
               </label>
               <select
+                id="dashboard-cycle-month"
                 value={newCycleMonth}
                 onChange={(e) => setNewCycleMonth(Number(e.target.value))}
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm"

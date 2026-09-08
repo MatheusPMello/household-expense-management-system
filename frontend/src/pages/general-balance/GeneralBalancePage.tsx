@@ -14,6 +14,30 @@ import {
   CheckCircle,
 } from 'lucide-react';
 
+const renderHistoricalBalanceBadge = (cents: number) => {
+  if (cents === 0) {
+    return <span className="text-emerald-600">$0.00 Settled</span>;
+  }
+  if (cents > 0) {
+    return (
+      <span className="text-rose-600">
+        {formatCentsToCurrency(cents)} Owed
+      </span>
+    );
+  }
+  return (
+    <span className="text-sky-600">
+      {formatCentsToCurrency(Math.abs(cents))} Credit
+    </span>
+  );
+};
+
+const getComplianceBarColor = (compliance: number): string => {
+  if (compliance >= 95) return 'bg-emerald-500';
+  if (compliance >= 75) return 'bg-amber-500';
+  return 'bg-rose-500';
+};
+
 export const GeneralBalancePage: React.FC = () => {
   const { activeHousehold } = useAuth();
 
@@ -123,29 +147,13 @@ export const GeneralBalancePage: React.FC = () => {
                       {formatCentsToCurrency(r.total_waived_cents)}
                     </td>
                     <td className="px-6 py-4 font-semibold">
-                      {r.outstanding_historical_balance_cents === 0 ? (
-                        <span className="text-emerald-600">$0.00 Settled</span>
-                      ) : r.outstanding_historical_balance_cents > 0 ? (
-                        <span className="text-rose-600">
-                          {formatCentsToCurrency(r.outstanding_historical_balance_cents)} Owed
-                        </span>
-                      ) : (
-                        <span className="text-sky-600">
-                          {formatCentsToCurrency(Math.abs(r.outstanding_historical_balance_cents))} Credit
-                        </span>
-                      )}
+                      {renderHistoricalBalanceBadge(r.outstanding_historical_balance_cents)}
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center space-x-2">
                         <div className="w-24 bg-slate-100 rounded-full h-2 overflow-hidden">
                           <div
-                            className={`h-full rounded-full ${
-                              compliance >= 95
-                                ? 'bg-emerald-500'
-                                : compliance >= 75
-                                ? 'bg-amber-500'
-                                : 'bg-rose-500'
-                            }`}
+                            className={`h-full rounded-full ${getComplianceBarColor(compliance)}`}
                             style={{ width: `${Math.min(compliance, 100)}%` }}
                           />
                         </div>

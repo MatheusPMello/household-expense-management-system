@@ -42,22 +42,24 @@ export const Modal: React.FC<ModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
-      <div
-        className={`bg-white rounded-xl shadow-2xl w-full ${maxWidthClass} overflow-hidden border border-slate-200 transform transition-all`}
-        role="dialog"
+      <dialog
+        open
         aria-modal="true"
+        aria-label={title}
+        className={`bg-white rounded-xl shadow-2xl w-full ${maxWidthClass} overflow-hidden border border-slate-200 transform transition-all m-0 p-0 text-left`}
       >
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/50">
           <h3 className="text-lg font-semibold text-slate-800">{title}</h3>
           <button
             onClick={onClose}
+            aria-label="Close dialog"
             className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
         <div className="p-6 max-h-[80vh] overflow-y-auto">{children}</div>
-      </div>
+      </dialog>
     </div>
   );
 };

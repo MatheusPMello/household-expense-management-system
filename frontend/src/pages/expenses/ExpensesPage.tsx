@@ -389,7 +389,7 @@ export const ExpensesPage: React.FC = () => {
             </select>
           )}
 
-          {activeCycle && activeCycle.status === 'OPEN' && (
+          {activeCycle?.status === 'OPEN' && (
             <button
               onClick={() => {
                 setFormError('');
@@ -550,10 +550,11 @@ export const ExpensesPage: React.FC = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+              <label htmlFor="create-expense-title" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                 Expense Title
               </label>
               <input
+                id="create-expense-title"
                 type="text"
                 required
                 value={title}
@@ -564,10 +565,11 @@ export const ExpensesPage: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+              <label htmlFor="create-expense-category" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                 Category
               </label>
               <select
+                id="create-expense-category"
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm"
@@ -662,10 +664,11 @@ export const ExpensesPage: React.FC = () => {
             <div>
               {recurrenceOption === 'ONE_OFF' ? (
                 <>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                  <label htmlFor="create-expense-due-date" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                     Due Date
                   </label>
                   <input
+                    id="create-expense-due-date"
                     type="date"
                     required
                     value={dueDate}
@@ -710,9 +713,9 @@ export const ExpensesPage: React.FC = () => {
 
           {/* Split Type Selector */}
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
+            <span className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
               Split Engine Algorithm
-            </label>
+            </span>
             <div className="grid grid-cols-4 gap-2">
               {(['EQUAL', 'PERCENTAGE', 'EXACT', 'WEIGHTED'] as SplitType[])
                 .filter((type) => recurrenceOption !== 'VARIABLE' || type !== 'EXACT')
@@ -781,7 +784,7 @@ export const ExpensesPage: React.FC = () => {
                           onChange={(e) =>
                             setPercentages({
                               ...percentages,
-                              [p.id]: parseFloat(e.target.value) || 0,
+                              [p.id]: Number.parseFloat(e.target.value) || 0,
                             })
                           }
                           className="w-16 px-2 py-1 text-xs border border-slate-300 rounded text-right"
@@ -822,7 +825,7 @@ export const ExpensesPage: React.FC = () => {
                           onChange={(e) =>
                             setWeights({
                               ...weights,
-                              [p.id]: parseFloat(e.target.value) || 1,
+                              [p.id]: Number.parseFloat(e.target.value) || 1,
                             })
                           }
                           className="w-16 px-2 py-1 text-xs border border-slate-300 rounded text-right"

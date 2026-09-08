@@ -49,7 +49,6 @@ def create_access_token(
 
 
 def create_refresh_token(
-    subject: str,
     expires_delta: Optional[timedelta] = None,
 ) -> tuple[str, str, datetime]:
     """

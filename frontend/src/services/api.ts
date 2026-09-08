@@ -54,7 +54,7 @@ api.interceptors.response.use(
 
     if (error.response?.status === 401 && !originalRequest._retry) {
       if (originalRequest.url?.includes('/auth/login') || originalRequest.url?.includes('/auth/register')) {
-        return Promise.reject(error);
+        throw error;
       }
 
       if (isRefreshing) {
@@ -67,7 +67,9 @@ api.interceptors.response.use(
             }
             return api(originalRequest);
           })
-          .catch((err) => Promise.reject(err));
+          .catch((err) => {
+            throw err;
+          });
       }
 
       originalRequest._retry = true;
@@ -79,7 +81,7 @@ api.interceptors.response.use(
         localStorage.removeItem('homeledger_access_token');
         localStorage.removeItem('homeledger_refresh_token');
         window.location.href = '/login';
-        return Promise.reject(error);
+        throw error;
       }
 
       try {
@@ -104,12 +106,12 @@ api.interceptors.response.use(
         localStorage.removeItem('homeledger_access_token');
         localStorage.removeItem('homeledger_refresh_token');
         window.location.href = '/login';
-        return Promise.reject(refreshErr);
+        throw refreshErr;
       } finally {
         isRefreshing = false;
       }
     }
 
-    return Promise.reject(error);
+    throw error;
   }
 );

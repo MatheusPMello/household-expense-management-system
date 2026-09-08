@@ -475,19 +475,6 @@ async def set_expense_amount(
 
     return format_expense_out(expense, person_map)
 
-    expense.total_amount_cents = data.actual_amount_cents
-    expense.status = "READY"
-    expense.split_type = split_type
-
-    await db.commit()
-    await db.refresh(expense, attribute_names=["splits"])
-
-    p_stmt = select(Person).where(Person.household_id == cycle.household_id)
-    persons = (await db.execute(p_stmt)).scalars().all()
-    person_map = {p.id: p.name for p in persons}
-
-    return format_expense_out(expense, person_map)
-
 
 @router.patch("/{expense_id}/payment-status", response_model=ExpenseOut)
 async def update_payment_status(

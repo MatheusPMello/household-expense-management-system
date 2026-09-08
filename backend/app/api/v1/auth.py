@@ -119,7 +119,7 @@ async def login(
 
     # Generate tokens
     access_token = create_access_token(subject=str(user.id))
-    raw_refresh, token_hash, expires_at = create_refresh_token(subject=str(user.id))
+    raw_refresh, token_hash, expires_at = create_refresh_token()
 
     # Save refresh token in DB
     db_token = RefreshToken(
@@ -176,9 +176,7 @@ async def refresh_tokens(
     # Generate new pair
     user_id = token_record.user_id
     new_access_token = create_access_token(subject=str(user_id))
-    new_raw_refresh, new_token_hash, new_expires_at = create_refresh_token(
-        subject=str(user_id)
-    )
+    new_raw_refresh, new_token_hash, new_expires_at = create_refresh_token()
 
     new_db_token = RefreshToken(
         user_id=user_id,

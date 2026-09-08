@@ -19,6 +19,50 @@ def get_safe_due_date(year: int, month: int, due_day: int) -> date:
     return date(year, month, valid_day)
 
 
+def _create_fixed_expense_splits(
+    db: AsyncSession,
+    expense_id: uuid.UUID,
+    tpl: FixedExpenseTemplate,
+    participant_ids: list[uuid.UUID],
+    total_cents: int,
+    split_type_val: str,
+) -> None:
+    cfg = getattr(tpl, "split_config", None) or {}
+    raw_pids = cfg.get("participant_ids")
+    if raw_pids:
+        tpl_pids = [uuid.UUID(str(pid)) for pid in raw_pids]
+        valid_pids = [pid for pid in tpl_pids if pid in participant_ids] or participant_ids
+    else:
+        valid_pids = participant_ids
+
+    pcts = (
+        {uuid.UUID(str(k)): float(v) for k, v in cfg.get("percentages", {}).items()}
+        if cfg.get("percentages")
+        else None
+    )
+    wts = (
+        {uuid.UUID(str(k)): float(v) for k, v in cfg.get("weights", {}).items()}
+        if cfg.get("weights")
+        else None
+    )
+
+    splits = calculate_splits(
+        total_amount_cents=total_cents,
+        split_type=split_type_val,
+        participant_ids=valid_pids,
+        percentages=pcts,
+        weights=wts,
+    )
+    for s in splits:
+        db.add(
+            ExpenseSplit(
+                expense_id=expense_id,
+                person_id=s.person_id,
+                assigned_amount_cents=s.assigned_amount_cents,
+            )
+        )
+
+
 async def _instantiate_template_expense(
     db: AsyncSession,
     cycle: BillingCycle,
@@ -55,40 +99,9 @@ async def _instantiate_template_expense(
 
     # For READY fixed expenses with an amount, calculate splits immediately
     if status_val == "READY" and total_cents > 0:
-        cfg = getattr(tpl, "split_config", None) or {}
-        raw_pids = cfg.get("participant_ids")
-        if raw_pids:
-            tpl_pids = [uuid.UUID(str(pid)) for pid in raw_pids]
-            valid_pids = [pid for pid in tpl_pids if pid in participant_ids] or participant_ids
-        else:
-            valid_pids = participant_ids
-
-        pcts = (
-            {uuid.UUID(str(k)): float(v) for k, v in cfg.get("percentages", {}).items()}
-            if cfg.get("percentages")
-            else None
+        _create_fixed_expense_splits(
+            db, expense.id, tpl, participant_ids, total_cents, split_type_val
         )
-        wts = (
-            {uuid.UUID(str(k)): float(v) for k, v in cfg.get("weights", {}).items()}
-            if cfg.get("weights")
-            else None
-        )
-
-        splits = calculate_splits(
-            total_amount_cents=total_cents,
-            split_type=split_type_val,
-            participant_ids=valid_pids,
-            percentages=pcts,
-            weights=wts,
-        )
-        for s in splits:
-            db.add(
-                ExpenseSplit(
-                    expense_id=expense.id,
-                    person_id=s.person_id,
-                    assigned_amount_cents=s.assigned_amount_cents,
-                )
-            )
 
 
 async def create_billing_cycle(

@@ -21,6 +21,8 @@ if TYPE_CHECKING:
     from app.models.payment import Payment
     from app.models.debt_waiver import DebtWaiver
 
+CASCADE_ALL_DELETE_ORPHAN = "all, delete-orphan"
+
 
 class BillingCycle(Base):
     __tablename__ = "billing_cycles"
@@ -54,11 +56,11 @@ class BillingCycle(Base):
         "Household", back_populates="billing_cycles"
     )
     expenses: Mapped[List["Expense"]] = relationship(
-        "Expense", back_populates="billing_cycle", cascade="all, delete-orphan"
+        "Expense", back_populates="billing_cycle", cascade=CASCADE_ALL_DELETE_ORPHAN
     )
     payments: Mapped[List["Payment"]] = relationship(
-        "Payment", back_populates="billing_cycle", cascade="all, delete-orphan"
+        "Payment", back_populates="billing_cycle", cascade=CASCADE_ALL_DELETE_ORPHAN
     )
     debt_waivers: Mapped[List["DebtWaiver"]] = relationship(
-        "DebtWaiver", back_populates="billing_cycle", cascade="all, delete-orphan"
+        "DebtWaiver", back_populates="billing_cycle", cascade=CASCADE_ALL_DELETE_ORPHAN
     )
