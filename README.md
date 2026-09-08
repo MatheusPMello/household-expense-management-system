@@ -1,6 +1,6 @@
 # HomeLedger — Shared Household Expense Management System
 
-HomeLedger is a multi-tenant web application designed for managing, allocating, and auditing shared household expenses. Built with a focus on mathematical precision, security, and ledger-based accounting, the system handles two-tier recurring expense templates (both fixed contracts and variable utility/condo bills), ad-hoc one-off costs, penny-perfect split algorithms, partial or full settlements, and audited debt forgiveness.
+HomeLedger is a multi-tenant web application designed for managing, allocating, and auditing shared household expenses. Built with a focus on mathematical precision, security, and ledger-based accounting, the system handles two-tier recurring expense templates (both fixed contracts and variable utility/condo bills), ad-hoc one-off costs, penny-perfect split algorithms, partial or full settlements, and audited debt forgiveness..
 
 ---
 
