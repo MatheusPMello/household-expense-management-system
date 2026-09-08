@@ -4,21 +4,24 @@ from typing import List, Optional
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
 
+ROLE_PATTERN = r"^(ADMIN|MEMBER)$"
+
+
 class PersonCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     email: Optional[EmailStr] = None
-    role: str = Field(default="MEMBER", pattern="^(ADMIN|MEMBER)$")
+    role: str = Field(default="MEMBER", pattern=ROLE_PATTERN)
 
 
 class PersonLinkUser(BaseModel):
     email: EmailStr
-    role: str = Field(default="MEMBER", pattern="^(ADMIN|MEMBER)$")
+    role: str = Field(default="MEMBER", pattern=ROLE_PATTERN)
 
 
 class PersonUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=100)
     is_active: Optional[bool] = None
-    role: Optional[str] = Field(default=None, pattern="^(ADMIN|MEMBER)$")
+    role: Optional[str] = Field(default=None, pattern=ROLE_PATTERN)
 
 
 class PersonOut(BaseModel):

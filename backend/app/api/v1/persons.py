@@ -23,7 +23,103 @@ from app.schemas.person import (
     PersonWaiverHistoryItem,
 )
 
+PERSON_NOT_FOUND = "Person not found."
+
 router = APIRouter(prefix="/persons", tags=["Persons / Residents"])
+
+
+def _build_split_history_items(splits: list) -> tuple[list[PersonSplitHistoryItem], int]:
+    splits_out = []
+    total_assigned = 0
+    sorted_splits = sorted(
+        splits, key=lambda x: (x.expense.due_date, x.expense.created_at), reverse=True
+    )
+    for s in sorted_splits:
+        total_assigned += s.assigned_amount_cents
+        cycle = s.expense.billing_cycle
+        splits_out.append(
+            PersonSplitHistoryItem(
+                expense_id=s.expense_id,
+                billing_cycle_id=s.expense.billing_cycle_id,
+                cycle_year=cycle.year if cycle else 0,
+                cycle_month=cycle.month if cycle else 0,
+                expense_title=s.expense.title,
+                category=s.expense.category,
+                due_date=s.expense.due_date,
+                assigned_amount_cents=s.assigned_amount_cents,
+                is_paid=s.expense.is_paid,
+            )
+        )
+    return splits_out, total_assigned
+
+
+def _build_payment_history_items(payments: list) -> tuple[list[PersonPaymentHistoryItem], int]:
+    payments_out = []
+    total_paid = 0
+    for p in payments:
+        total_paid += p.amount_cents
+        cycle = p.billing_cycle
+        payments_out.append(
+            PersonPaymentHistoryItem(
+                id=p.id,
+                billing_cycle_id=p.billing_cycle_id,
+                cycle_year=cycle.year if cycle else 0,
+                cycle_month=cycle.month if cycle else 0,
+                amount_cents=p.amount_cents,
+                paid_at=p.paid_at,
+                notes=p.notes,
+                proof_url=p.proof_url,
+            )
+        )
+    return payments_out, total_paid
+
+
+def _build_waiver_history_items(waivers: list) -> tuple[list[PersonWaiverHistoryItem], int]:
+    waivers_out = []
+    total_waived = 0
+    for w in waivers:
+        total_waived += w.amount_cents
+        cycle = w.billing_cycle
+        waivers_out.append(
+            PersonWaiverHistoryItem(
+                id=w.id,
+                billing_cycle_id=w.billing_cycle_id,
+                cycle_year=cycle.year if cycle else 0,
+                cycle_month=cycle.month if cycle else 0,
+                amount_cents=w.amount_cents,
+                waived_at=w.waived_at,
+                reason=w.reason,
+            )
+        )
+    return waivers_out, total_waived
+
+
+async def _handle_person_role_update(
+    db: AsyncSession, person: Person, new_role: str
+) -> None:
+    if not person.user_id:
+        return
+    mem_stmt = select(HouseholdMember).where(
+        HouseholdMember.household_id == person.household_id,
+        HouseholdMember.user_id == person.user_id,
+    )
+    target_mem = (await db.execute(mem_stmt)).scalar_one_or_none()
+    if not target_mem or target_mem.role == new_role:
+        return
+
+    if target_mem.role == "ADMIN" and new_role == "MEMBER":
+        other_admins_stmt = select(func.count(HouseholdMember.id)).where(
+            HouseholdMember.household_id == person.household_id,
+            HouseholdMember.role == "ADMIN",
+            HouseholdMember.user_id != person.user_id,
+        )
+        other_admins = (await db.execute(other_admins_stmt)).scalar() or 0
+        if other_admins == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot demote the only administrator in the household.",
+            )
+    target_mem.role = new_role
 
 
 async def _build_person_out(person: Person, db: AsyncSession) -> PersonOut:
@@ -67,7 +163,7 @@ async def update_person(
     person = (await db.execute(stmt)).scalar_one_or_none()
     if not person:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Person not found."
+            status_code=status.HTTP_404_NOT_FOUND, detail=PERSON_NOT_FOUND
         )
 
     # Only household ADMIN can update resident details
@@ -93,28 +189,8 @@ async def update_person(
     if data.is_active is not None:
         person.is_active = data.is_active
 
-    if data.role is not None and person.user_id is not None:
-        # Check household member record for this user
-        mem_stmt = select(HouseholdMember).where(
-            HouseholdMember.household_id == person.household_id,
-            HouseholdMember.user_id == person.user_id,
-        )
-        target_mem = (await db.execute(mem_stmt)).scalar_one_or_none()
-        if target_mem and target_mem.role != data.role:
-            # If demoting from ADMIN to MEMBER, ensure at least one other ADMIN remains
-            if target_mem.role == "ADMIN" and data.role == "MEMBER":
-                other_admins_stmt = select(func.count(HouseholdMember.id)).where(
-                    HouseholdMember.household_id == person.household_id,
-                    HouseholdMember.role == "ADMIN",
-                    HouseholdMember.user_id != person.user_id,
-                )
-                other_admins = (await db.execute(other_admins_stmt)).scalar() or 0
-                if other_admins == 0:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Cannot demote the only administrator in the household.",
-                    )
-            target_mem.role = data.role
+    if data.role is not None:
+        await _handle_person_role_update(db, person, data.role)
 
     await db.commit()
     await db.refresh(person)
@@ -131,7 +207,7 @@ async def delete_person(
     person = (await db.execute(stmt)).scalar_one_or_none()
     if not person:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Person not found."
+            status_code=status.HTTP_404_NOT_FOUND, detail=PERSON_NOT_FOUND
         )
 
     # Only household ADMIN can delete residents
@@ -198,7 +274,7 @@ async def restore_person(
     person = (await db.execute(stmt)).scalar_one_or_none()
     if not person:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Person not found."
+            status_code=status.HTTP_404_NOT_FOUND, detail=PERSON_NOT_FOUND
         )
 
     # Only household ADMIN can restore residents
@@ -238,7 +314,7 @@ async def get_person_history(
     person = (await db.execute(stmt)).scalar_one_or_none()
     if not person:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Person not found."
+            status_code=status.HTTP_404_NOT_FOUND, detail=PERSON_NOT_FOUND
         )
 
     # Check caller is a member of this household
@@ -261,25 +337,7 @@ async def get_person_history(
         )
     )
     splits = (await db.execute(splits_stmt)).scalars().all()
-
-    splits_out = []
-    total_assigned = 0
-    for s in sorted(splits, key=lambda x: (x.expense.due_date, x.expense.created_at), reverse=True):
-        total_assigned += s.assigned_amount_cents
-        cycle = s.expense.billing_cycle
-        splits_out.append(
-            PersonSplitHistoryItem(
-                expense_id=s.expense_id,
-                billing_cycle_id=s.expense.billing_cycle_id,
-                cycle_year=cycle.year if cycle else 0,
-                cycle_month=cycle.month if cycle else 0,
-                expense_title=s.expense.title,
-                category=s.expense.category,
-                due_date=s.expense.due_date,
-                assigned_amount_cents=s.assigned_amount_cents,
-                is_paid=s.expense.is_paid,
-            )
-        )
+    splits_out, total_assigned = _build_split_history_items(splits)
 
     # 2. Fetch payments with cycle info
     payments_stmt = (
@@ -289,23 +347,7 @@ async def get_person_history(
         .order_by(Payment.paid_at.desc())
     )
     payments = (await db.execute(payments_stmt)).scalars().all()
-    payments_out = []
-    total_paid = 0
-    for p in payments:
-        total_paid += p.amount_cents
-        cycle = p.billing_cycle
-        payments_out.append(
-            PersonPaymentHistoryItem(
-                id=p.id,
-                billing_cycle_id=p.billing_cycle_id,
-                cycle_year=cycle.year if cycle else 0,
-                cycle_month=cycle.month if cycle else 0,
-                amount_cents=p.amount_cents,
-                paid_at=p.paid_at,
-                notes=p.notes,
-                proof_url=p.proof_url,
-            )
-        )
+    payments_out, total_paid = _build_payment_history_items(payments)
 
     # 3. Fetch debt waivers with cycle info
     waivers_stmt = (
@@ -315,22 +357,7 @@ async def get_person_history(
         .order_by(DebtWaiver.waived_at.desc())
     )
     waivers = (await db.execute(waivers_stmt)).scalars().all()
-    waivers_out = []
-    total_waived = 0
-    for w in waivers:
-        total_waived += w.amount_cents
-        cycle = w.billing_cycle
-        waivers_out.append(
-            PersonWaiverHistoryItem(
-                id=w.id,
-                billing_cycle_id=w.billing_cycle_id,
-                cycle_year=cycle.year if cycle else 0,
-                cycle_month=cycle.month if cycle else 0,
-                amount_cents=w.amount_cents,
-                waived_at=w.waived_at,
-                reason=w.reason,
-            )
-        )
+    waivers_out, total_waived = _build_waiver_history_items(waivers)
 
     user_email: Optional[str] = None
     role: Optional[str] = None
@@ -380,7 +407,7 @@ async def link_user_to_person(
     person = (await db.execute(stmt)).scalar_one_or_none()
     if not person:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Person not found."
+            status_code=status.HTTP_404_NOT_FOUND, detail=PERSON_NOT_FOUND
         )
 
     # Only household ADMIN can link user accounts
@@ -449,7 +476,7 @@ async def unlink_user_from_person(
     person = (await db.execute(stmt)).scalar_one_or_none()
     if not person:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Person not found."
+            status_code=status.HTTP_404_NOT_FOUND, detail=PERSON_NOT_FOUND
         )
 
     # Only household ADMIN can unlink user accounts

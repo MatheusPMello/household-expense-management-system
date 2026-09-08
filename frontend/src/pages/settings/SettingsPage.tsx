@@ -32,6 +32,184 @@ import {
   History,
 } from 'lucide-react';
 
+const getBalanceTextColor = (cents: number): string => {
+  if (cents > 0) return 'text-rose-600';
+  if (cents < 0) return 'text-emerald-600';
+  return 'text-slate-700';
+};
+
+interface ResidentTableRowProps {
+  person: Person;
+  isAdmin: boolean;
+  onViewHistory: (p: Person) => void;
+  onRestore: (p: Person) => void;
+  isRestoring: boolean;
+  onEdit: (p: Person) => void;
+  onUnlink: (p: Person) => void;
+  isUnlinking: boolean;
+  onLink: (p: Person) => void;
+  onToggleActive: (personId: string, isActive: boolean) => void;
+  onDelete: (p: Person) => void;
+}
+
+const ResidentTableRow: React.FC<ResidentTableRowProps> = ({
+  person: p,
+  isAdmin,
+  onViewHistory,
+  onRestore,
+  isRestoring,
+  onEdit,
+  onUnlink,
+  isUnlinking,
+  onLink,
+  onToggleActive,
+  onDelete,
+}) => {
+  return (
+    <tr
+      key={p.id}
+      className={`hover:bg-slate-50/50 transition-colors ${
+        p.is_deleted ? 'bg-slate-50/70 opacity-75' : ''
+      }`}
+    >
+      <td className="px-6 py-4">
+        <div className="flex items-center space-x-2">
+          <span
+            className={`font-semibold ${
+              p.is_deleted ? 'text-slate-500 line-through' : 'text-slate-900'
+            }`}
+          >
+            {p.name}
+          </span>
+          {p.is_deleted && (
+            <span className="text-[10px] font-semibold tracking-wider uppercase px-1.5 py-0.5 bg-rose-100 text-rose-700 rounded">
+              Deleted
+            </span>
+          )}
+        </div>
+        {p.is_deleted && p.deleted_at && (
+          <p className="text-[11px] text-slate-400 mt-0.5">
+            Deleted on {formatDate(p.deleted_at)}
+          </p>
+        )}
+      </td>
+      <td className="px-6 py-4">
+        {p.user_email ? (
+          <div className="flex items-center space-x-1.5 text-slate-700 text-xs font-medium">
+            <Mail className="w-3.5 h-3.5 text-slate-400" />
+            <span>{p.user_email}</span>
+          </div>
+        ) : (
+          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200">
+            Standalone (No Login)
+          </span>
+        )}
+      </td>
+      <td className="px-6 py-4">
+        {p.role ? (
+          <StatusBadge type="role" value={p.role} />
+        ) : (
+          <span className="text-xs text-slate-400">—</span>
+        )}
+      </td>
+      <td className="px-6 py-4">
+        {p.is_deleted ? (
+          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-50 text-rose-700 border border-rose-200">
+            Deleted (Archived)
+          </span>
+        ) : (
+          <span
+            className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+              p.is_active
+                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                : 'bg-slate-100 text-slate-500'
+            }`}
+          >
+            {p.is_active ? 'Active' : 'Inactive'}
+          </span>
+        )}
+      </td>
+      <td className="px-6 py-4 text-right">
+        <div className="flex items-center justify-end space-x-1.5">
+          <button
+            onClick={() => onViewHistory(p)}
+            title="View Ledger & Settlement History"
+            className="flex items-center space-x-1 px-2.5 py-1 text-xs font-medium text-slate-700 hover:text-indigo-700 bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 rounded transition-colors"
+          >
+            <History className="w-3 h-3 text-slate-500" />
+            <span>History</span>
+          </button>
+
+          {p.is_deleted && isAdmin && (
+            <button
+              onClick={() => onRestore(p)}
+              disabled={isRestoring}
+              title="Restore Deleted Resident"
+              className="flex items-center space-x-1 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded transition-colors"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Restore</span>
+            </button>
+          )}
+
+          {!p.is_deleted && isAdmin && (
+            <>
+              <button
+                onClick={() => onEdit(p)}
+                title="Edit Resident"
+                className="flex items-center space-x-1 px-2.5 py-1 text-xs font-medium text-slate-700 hover:text-emerald-700 bg-slate-50 hover:bg-emerald-50 border border-slate-200 hover:border-emerald-200 rounded transition-colors"
+              >
+                <Edit2 className="w-3 h-3" />
+                <span>Edit</span>
+              </button>
+
+              {p.user_id ? (
+                <button
+                  onClick={() => onUnlink(p)}
+                  disabled={isUnlinking}
+                  title="Unlink User Account"
+                  className="flex items-center space-x-1 px-2.5 py-1 text-xs font-medium text-amber-700 hover:text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded transition-colors"
+                >
+                  <Unlink className="w-3 h-3" />
+                  <span>Unlink</span>
+                </button>
+              ) : (
+                <button
+                  onClick={() => onLink(p)}
+                  title="Link Registered User Account"
+                  className="flex items-center space-x-1 px-2.5 py-1 text-xs font-medium text-indigo-700 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded transition-colors"
+                >
+                  <Link2 className="w-3 h-3" />
+                  <span>Link User</span>
+                </button>
+              )}
+
+              <button
+                onClick={() => onToggleActive(p.id, !p.is_active)}
+                className={`text-xs px-2.5 py-1 rounded font-medium border transition-colors ${
+                  p.is_active
+                    ? 'bg-slate-50 hover:bg-amber-50 text-slate-600 hover:text-amber-700 border-slate-200'
+                    : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200'
+                }`}
+              >
+                {p.is_active ? 'Deactivate' : 'Activate'}
+              </button>
+
+              <button
+                onClick={() => onDelete(p)}
+                title="Delete Resident"
+                className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded border border-transparent hover:border-rose-200 transition-colors"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
+};
+
 export const SettingsPage: React.FC = () => {
   const { activeHousehold, user } = useAuth();
   const queryClient = useQueryClient();
@@ -510,196 +688,59 @@ export const SettingsPage: React.FC = () => {
                 </tr>
               ) : (
                 displayedPersons.map((p) => (
-                  <tr
+                  <ResidentTableRow
                     key={p.id}
-                    className={`hover:bg-slate-50/50 transition-colors ${
-                      p.is_deleted ? 'bg-slate-50/70 opacity-75' : ''
-                    }`}
-                  >
-                    <td className="px-6 py-4">
-                      <div className="flex items-center space-x-2">
-                        <span
-                          className={`font-semibold ${
-                            p.is_deleted ? 'text-slate-500 line-through' : 'text-slate-900'
-                          }`}
-                        >
-                          {p.name}
-                        </span>
-                        {p.is_deleted && (
-                          <span className="text-[10px] font-semibold tracking-wider uppercase px-1.5 py-0.5 bg-rose-100 text-rose-700 rounded">
-                            Deleted
-                          </span>
-                        )}
-                      </div>
-                      {p.is_deleted && p.deleted_at && (
-                        <p className="text-[11px] text-slate-400 mt-0.5">
-                          Deleted on {formatDate(p.deleted_at)}
-                        </p>
-                      )}
-                    </td>
-                    <td className="px-6 py-4">
-                      {p.user_email ? (
-                        <div className="flex items-center space-x-1.5 text-slate-700 text-xs font-medium">
-                          <Mail className="w-3.5 h-3.5 text-slate-400" />
-                          <span>{p.user_email}</span>
-                        </div>
-                      ) : (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200">
-                          Standalone (No Login)
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4">
-                      {p.role ? (
-                        <StatusBadge type="role" value={p.role} />
-                      ) : (
-                        <span className="text-xs text-slate-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4">
-                      {p.is_deleted ? (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-50 text-rose-700 border border-rose-200">
-                          Deleted (Archived)
-                        </span>
-                      ) : (
-                        <span
-                          className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                            p.is_active
-                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                              : 'bg-slate-100 text-slate-500'
-                          }`}
-                        >
-                          {p.is_active ? 'Active' : 'Inactive'}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <div className="flex items-center justify-end space-x-1.5">
-                        {/* History Button (always available to inspect full audit trail) */}
-                        <button
-                          onClick={() => {
-                            setHistoryPerson(p);
-                            setHistoryTab('splits');
-                            setIsHistoryModalOpen(true);
-                          }}
-                          title="View Ledger & Settlement History"
-                          className="flex items-center space-x-1 px-2.5 py-1 text-xs font-medium text-slate-700 hover:text-indigo-700 bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 rounded transition-colors"
-                        >
-                          <History className="w-3 h-3 text-slate-500" />
-                          <span>History</span>
-                        </button>
-
-                        {p.is_deleted ? (
-                          <>
-                            {isAdmin && (
-                              <button
-                                onClick={() => {
-                                  if (
-                                    confirm(
-                                      `Restore resident "${p.name}"? They will become active again and participate in upcoming cycles.`
-                                    )
-                                  ) {
-                                    restorePersonMutation.mutate(p.id);
-                                  }
-                                }}
-                                disabled={restorePersonMutation.isPending}
-                                title="Restore Deleted Resident"
-                                className="flex items-center space-x-1 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded transition-colors"
-                              >
-                                <RotateCcw className="w-3 h-3" />
-                                <span>Restore</span>
-                              </button>
-                            )}
-                          </>
-                        ) : (
-                          <>
-                            {isAdmin && (
-                              <>
-                                <button
-                                  onClick={() => {
-                                    setFormError('');
-                                    setEditingPerson(p);
-                                    setEditPersonName(p.name);
-                                    setEditPersonRole((p.role as 'ADMIN' | 'MEMBER') || 'MEMBER');
-                                    setEditPersonIsActive(p.is_active);
-                                    setIsEditPersonModalOpen(true);
-                                  }}
-                                  title="Edit Resident"
-                                  className="flex items-center space-x-1 px-2.5 py-1 text-xs font-medium text-slate-700 hover:text-emerald-700 bg-slate-50 hover:bg-emerald-50 border border-slate-200 hover:border-emerald-200 rounded transition-colors"
-                                >
-                                  <Edit2 className="w-3 h-3" />
-                                  <span>Edit</span>
-                                </button>
-
-                                {p.user_id ? (
-                                  <button
-                                    onClick={() => {
-                                      if (
-                                        confirm(
-                                          `Unlink user account from resident "${p.name}"? They will become a standalone resident and won't be tied to that login account.`
-                                        )
-                                      ) {
-                                        unlinkUser.mutate(p.id);
-                                      }
-                                    }}
-                                    disabled={unlinkUser.isPending}
-                                    title="Unlink User Account"
-                                    className="flex items-center space-x-1 px-2.5 py-1 text-xs font-medium text-amber-700 hover:text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded transition-colors"
-                                  >
-                                    <Unlink className="w-3 h-3" />
-                                    <span>Unlink</span>
-                                  </button>
-                                ) : (
-                                  <button
-                                    onClick={() => {
-                                      setFormError('');
-                                      setLinkingPerson(p);
-                                      setLinkEmail('');
-                                      setLinkRole('MEMBER');
-                                      setIsLinkModalOpen(true);
-                                    }}
-                                    title="Link Registered User Account"
-                                    className="flex items-center space-x-1 px-2.5 py-1 text-xs font-medium text-indigo-700 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded transition-colors"
-                                  >
-                                    <Link2 className="w-3 h-3" />
-                                    <span>Link User</span>
-                                  </button>
-                                )}
-
-                                <button
-                                  onClick={() =>
-                                    togglePersonActive.mutate({
-                                      personId: p.id,
-                                      isActive: !p.is_active,
-                                    })
-                                  }
-                                  className={`text-xs px-2.5 py-1 rounded font-medium border transition-colors ${
-                                    p.is_active
-                                      ? 'bg-slate-50 hover:bg-amber-50 text-slate-600 hover:text-amber-700 border-slate-200'
-                                      : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200'
-                                  }`}
-                                >
-                                  {p.is_active ? 'Deactivate' : 'Activate'}
-                                </button>
-
-                                <button
-                                  onClick={() => {
-                                    setFormError('');
-                                    setDeletingPerson(p);
-                                    setIsDeletePersonModalOpen(true);
-                                  }}
-                                  title="Delete Resident"
-                                  className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded border border-transparent hover:border-rose-200 transition-colors"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              </>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
+                    person={p}
+                    isAdmin={isAdmin}
+                    onViewHistory={(person) => {
+                      setHistoryPerson(person);
+                      setHistoryTab('splits');
+                      setIsHistoryModalOpen(true);
+                    }}
+                    onRestore={(person) => {
+                      if (
+                        confirm(
+                          `Restore resident "${person.name}"? They will become active again and participate in upcoming cycles.`
+                        )
+                      ) {
+                        restorePersonMutation.mutate(person.id);
+                      }
+                    }}
+                    isRestoring={restorePersonMutation.isPending}
+                    onEdit={(person) => {
+                      setFormError('');
+                      setEditingPerson(person);
+                      setEditPersonName(person.name);
+                      setEditPersonRole((person.role as 'ADMIN' | 'MEMBER') || 'MEMBER');
+                      setEditPersonIsActive(person.is_active);
+                      setIsEditPersonModalOpen(true);
+                    }}
+                    onUnlink={(person) => {
+                      if (
+                        confirm(
+                          `Unlink user account from resident "${person.name}"? They will become a standalone resident and won't be tied to that login account.`
+                        )
+                      ) {
+                        unlinkUser.mutate(person.id);
+                      }
+                    }}
+                    isUnlinking={unlinkUser.isPending}
+                    onLink={(person) => {
+                      setFormError('');
+                      setLinkingPerson(person);
+                      setLinkEmail('');
+                      setLinkRole('MEMBER');
+                      setIsLinkModalOpen(true);
+                    }}
+                    onToggleActive={(personId, isActive) =>
+                      togglePersonActive.mutate({ personId, isActive })
+                    }
+                    onDelete={(person) => {
+                      setFormError('');
+                      setDeletingPerson(person);
+                      setIsDeletePersonModalOpen(true);
+                    }}
+                  />
                 ))
               )}
             </tbody>
@@ -906,10 +947,11 @@ export const SettingsPage: React.FC = () => {
           )}
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+            <label htmlFor="add-resident-name" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
               Resident Full Name *
             </label>
             <input
+              id="add-resident-name"
               type="text"
               required
               value={personName}
@@ -920,10 +962,11 @@ export const SettingsPage: React.FC = () => {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+            <label htmlFor="add-resident-email" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
               Registered User Email (Optional)
             </label>
             <input
+              id="add-resident-email"
               type="email"
               value={personEmail}
               onChange={(e) => setPersonEmail(e.target.value)}
@@ -937,10 +980,11 @@ export const SettingsPage: React.FC = () => {
 
           {personEmail.trim() && (
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+              <label htmlFor="add-resident-role" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                 Assigned Household Role
               </label>
               <select
+                id="add-resident-role"
                 value={personRole}
                 onChange={(e) => setPersonRole(e.target.value as 'ADMIN' | 'MEMBER')}
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm"
@@ -994,10 +1038,11 @@ export const SettingsPage: React.FC = () => {
           )}
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+            <label htmlFor="edit-resident-name" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
               Resident Full Name *
             </label>
             <input
+              id="edit-resident-name"
               type="text"
               required
               value={editPersonName}
@@ -1008,9 +1053,9 @@ export const SettingsPage: React.FC = () => {
 
           {editingPerson?.user_email && (
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+              <span className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                 Linked User Account
-              </label>
+              </span>
               <div className="px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg text-xs text-slate-600 flex items-center space-x-2">
                 <Mail className="w-3.5 h-3.5 text-slate-400" />
                 <span>{editingPerson.user_email}</span>
@@ -1020,10 +1065,11 @@ export const SettingsPage: React.FC = () => {
 
           {editingPerson?.user_id && (
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+              <label htmlFor="edit-resident-role" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                 Assigned Household Role
               </label>
               <select
+                id="edit-resident-role"
                 value={editPersonRole}
                 onChange={(e) => setEditPersonRole(e.target.value as 'ADMIN' | 'MEMBER')}
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm"
@@ -1035,9 +1081,9 @@ export const SettingsPage: React.FC = () => {
           )}
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+            <span className="block text-xs font-semibold text-slate-700 uppercase mb-1">
               Participation Status
-            </label>
+            </span>
             <div className="flex items-center space-x-4 mt-1">
               <label className="flex items-center space-x-2 cursor-pointer text-sm text-slate-700">
                 <input
@@ -1200,15 +1246,7 @@ export const SettingsPage: React.FC = () => {
               </div>
               <div className="p-3 bg-white border border-slate-200 rounded-xl shadow-2xs">
                 <p className="text-[11px] font-semibold text-slate-500 uppercase">Net Balance</p>
-                <p
-                  className={`text-sm font-bold mt-1 ${
-                    personHistory.outstanding_balance_cents > 0
-                      ? 'text-rose-600'
-                      : personHistory.outstanding_balance_cents < 0
-                      ? 'text-emerald-600'
-                      : 'text-slate-700'
-                  }`}
-                >
+                <p className={`text-sm font-bold mt-1 ${getBalanceTextColor(personHistory.outstanding_balance_cents)}`}>
                   {formatCentsToCurrency(personHistory.outstanding_balance_cents)}
                 </p>
               </div>
@@ -1262,9 +1300,9 @@ export const SettingsPage: React.FC = () => {
                   {!personHistory?.splits || personHistory.splits.length === 0 ? (
                     <div className="py-6 text-center text-xs text-slate-400">No expense splits recorded.</div>
                   ) : (
-                    personHistory.splits.map((s, idx) => (
+                    personHistory.splits.map((s) => (
                       <div
-                        key={idx}
+                        key={s.expense_id}
                         className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between text-xs"
                       >
                         <div>
@@ -1475,10 +1513,11 @@ export const SettingsPage: React.FC = () => {
           )}
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+            <label htmlFor="template-title" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
               Template Title
             </label>
             <input
+              id="template-title"
               type="text"
               required
               value={templateTitle}
@@ -1489,9 +1528,9 @@ export const SettingsPage: React.FC = () => {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
+            <span className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
               Recurrence Type
-            </label>
+            </span>
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
@@ -1520,12 +1559,13 @@ export const SettingsPage: React.FC = () => {
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+              <label htmlFor="template-amount" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                 {templateRecurrenceType === 'VARIABLE'
                   ? 'Estimated Amount ($) (Optional)'
                   : 'Contract Amount ($)'}
               </label>
               <input
+                id="template-amount"
                 type="number"
                 step="0.01"
                 required={templateRecurrenceType === 'FIXED'}
@@ -1537,10 +1577,11 @@ export const SettingsPage: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+              <label htmlFor="template-due-day" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                 Due Day (1-31)
               </label>
               <input
+                id="template-due-day"
                 type="number"
                 min={1}
                 max={31}
@@ -1553,10 +1594,11 @@ export const SettingsPage: React.FC = () => {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+            <label htmlFor="template-category" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
               Category
             </label>
             <select
+              id="template-category"
               value={templateCategory}
               onChange={(e) => setTemplateCategory(e.target.value)}
               className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm"

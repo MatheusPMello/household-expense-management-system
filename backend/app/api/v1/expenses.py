@@ -22,7 +22,166 @@ from app.schemas.expense import (
 from app.services.split_engine import calculate_splits, SplitEngineError
 from app.services.cycle_service import verify_cycle_is_open
 
+EXPENSE_NOT_FOUND = "Expense not found."
+
 router = APIRouter(prefix="/expenses", tags=["Expenses & Splits"])
+
+
+def _extract_participant_ids(
+    data: ExpenseCreate | ExpenseUpdate,
+) -> list[uuid.UUID]:
+    target_ids: list[uuid.UUID] = []
+    if data.participant_ids:
+        target_ids.extend(data.participant_ids)
+    if data.percentages:
+        target_ids.extend(data.percentages.keys())
+    if data.exact_amounts:
+        target_ids.extend(data.exact_amounts.keys())
+    if data.weights:
+        target_ids.extend(data.weights.keys())
+    return target_ids
+
+
+async def _verify_household_participants(
+    db: AsyncSession, household_id: uuid.UUID, target_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    if not target_ids:
+        return {}
+    p_stmt = select(Person).where(
+        Person.household_id == household_id,
+        Person.id.in_(target_ids),
+    )
+    household_persons = (await db.execute(p_stmt)).scalars().all()
+    if len(household_persons) != len(set(target_ids)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="One or more specified participants do not belong to this household.",
+        )
+    return {p.id: p.name for p in household_persons}
+
+
+async def _create_template_from_expense(
+    db: AsyncSession, household_id: uuid.UUID, data: ExpenseCreate
+) -> tuple[uuid.UUID, bool, str]:
+    tpl_split_config: Dict = {}
+    if data.participant_ids:
+        tpl_split_config["participant_ids"] = [str(pid) for pid in data.participant_ids]
+    if data.percentages:
+        tpl_split_config["percentages"] = {str(k): v for k, v in data.percentages.items()}
+    if data.weights:
+        tpl_split_config["weights"] = {str(k): v for k, v in data.weights.items()}
+
+    tpl = FixedExpenseTemplate(
+        household_id=household_id,
+        title=data.title.strip(),
+        recurrence_type=data.recurrence_type,
+        estimated_amount_cents=data.total_amount_cents if data.total_amount_cents > 0 else None,
+        due_day=data.due_day or data.due_date.day,
+        category=data.category.strip(),
+        is_active=True,
+        split_type=data.split_type,
+        split_config=tpl_split_config if tpl_split_config else None,
+    )
+    db.add(tpl)
+    await db.flush()
+    is_fixed = data.recurrence_type == "FIXED"
+    if data.recurrence_type == "VARIABLE" and data.total_amount_cents == 0:
+        target_status = "PENDING_VALUE"
+    else:
+        target_status = data.status or "READY"
+    return tpl.id, is_fixed, target_status
+
+
+async def _recalculate_and_apply_splits(
+    db: AsyncSession,
+    expense: Expense,
+    new_amount: int,
+    new_split_type: str,
+    data: ExpenseUpdate,
+) -> None:
+    participant_ids = data.participant_ids
+    if participant_ids is None and not any((data.percentages, data.exact_amounts, data.weights)):
+        if new_split_type == "EQUAL":
+            participant_ids = [s.person_id for s in expense.splits]
+        elif new_split_type == "PERCENTAGE" and not data.percentages:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Updating amount or switching to PERCENTAGE split requires providing percentages.",
+            )
+        elif new_split_type == "EXACT" and not data.exact_amounts:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Updating amount or switching to EXACT split requires providing exact amounts.",
+            )
+        elif new_split_type == "WEIGHTED" and not data.weights:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Updating amount or switching to WEIGHTED split requires providing weights.",
+            )
+
+    try:
+        calculated_splits = calculate_splits(
+            total_amount_cents=new_amount,
+            split_type=new_split_type,
+            participant_ids=participant_ids,
+            percentages=data.percentages,
+            exact_amounts=data.exact_amounts,
+            weights=data.weights,
+        )
+    except SplitEngineError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        )
+
+    del_stmt = delete(ExpenseSplit).where(ExpenseSplit.expense_id == expense.id)
+    await db.execute(del_stmt)
+
+    for s in calculated_splits:
+        db.add(
+            ExpenseSplit(
+                expense_id=expense.id,
+                person_id=s.person_id,
+                assigned_amount_cents=s.assigned_amount_cents,
+            )
+        )
+
+
+async def _resolve_split_rule_participants(
+    db: AsyncSession, cycle: BillingCycle, expense: Expense
+) -> tuple[str, Optional[list[uuid.UUID]], Optional[dict], Optional[dict]]:
+    split_type = expense.split_type
+    participant_ids: Optional[List[uuid.UUID]] = None
+    percentages: Optional[Dict[uuid.UUID, float]] = None
+    weights: Optional[Dict[uuid.UUID, float]] = None
+
+    if expense.template:
+        split_type = expense.template.split_type or split_type
+        cfg = expense.template.split_config or {}
+        raw_pids = cfg.get("participant_ids")
+        if raw_pids:
+            participant_ids = [uuid.UUID(str(pid)) for pid in raw_pids]
+        if cfg.get("percentages"):
+            percentages = {
+                uuid.UUID(str(k)): float(v) for k, v in cfg["percentages"].items()
+            }
+        if cfg.get("weights"):
+            weights = {
+                uuid.UUID(str(k)): float(v) for k, v in cfg["weights"].items()
+            }
+
+    if not participant_ids and expense.splits:
+        participant_ids = [s.person_id for s in expense.splits]
+
+    if not participant_ids and not percentages and not weights:
+        p_stmt = select(Person).where(
+            Person.household_id == cycle.household_id,
+            Person.is_active == True,
+            Person.is_deleted == False,
+        )
+        active_persons = (await db.execute(p_stmt)).scalars().all()
+        participant_ids = [p.id for p in active_persons]
+
+    return split_type, participant_ids, percentages, weights
 
 
 async def get_cycle_and_verify_access(
@@ -84,69 +243,26 @@ async def create_expense(
     cycle = await get_cycle_and_verify_access(data.billing_cycle_id, current_user.id, db)
     verify_cycle_is_open(cycle)
 
-    # Validate that all involved persons belong to this household
-    all_target_ids: List[uuid.UUID] = []
-    if data.participant_ids:
-        all_target_ids.extend(data.participant_ids)
-    if data.percentages:
-        all_target_ids.extend(data.percentages.keys())
-    if data.exact_amounts:
-        all_target_ids.extend(data.exact_amounts.keys())
-    if data.weights:
-        all_target_ids.extend(data.weights.keys())
-
+    all_target_ids = _extract_participant_ids(data)
     if not all_target_ids:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="At least one participant must be specified for expense splitting.",
         )
 
-    p_stmt = select(Person).where(
-        Person.household_id == cycle.household_id,
-        Person.id.in_(all_target_ids),
+    person_name_map = await _verify_household_participants(
+        db, cycle.household_id, all_target_ids
     )
-    household_persons = (await db.execute(p_stmt)).scalars().all()
-    if len(household_persons) != len(set(all_target_ids)):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="One or more specified participants do not belong to this household.",
-        )
-
-    person_name_map = {p.id: p.name for p in household_persons}
 
     template_id = data.template_id
     is_fixed = data.is_fixed
     target_status = data.status or "READY"
 
-    # If recurring option is chosen and no template_id provided, create the template
     if data.recurrence_type in ("FIXED", "VARIABLE") and not template_id:
-        tpl_split_config: Dict = {}
-        if data.participant_ids:
-            tpl_split_config["participant_ids"] = [str(pid) for pid in data.participant_ids]
-        if data.percentages:
-            tpl_split_config["percentages"] = {str(k): v for k, v in data.percentages.items()}
-        if data.weights:
-            tpl_split_config["weights"] = {str(k): v for k, v in data.weights.items()}
-
-        tpl = FixedExpenseTemplate(
-            household_id=cycle.household_id,
-            title=data.title.strip(),
-            recurrence_type=data.recurrence_type,
-            estimated_amount_cents=data.total_amount_cents if data.total_amount_cents > 0 else None,
-            due_day=data.due_day or data.due_date.day,
-            category=data.category.strip(),
-            is_active=True,
-            split_type=data.split_type,
-            split_config=tpl_split_config if tpl_split_config else None,
+        template_id, is_fixed, target_status = await _create_template_from_expense(
+            db, cycle.household_id, data
         )
-        db.add(tpl)
-        await db.flush()
-        template_id = tpl.id
-        is_fixed = data.recurrence_type == "FIXED"
-        if data.recurrence_type == "VARIABLE" and data.total_amount_cents == 0:
-            target_status = "PENDING_VALUE"
 
-    # Handle PENDING_VALUE vs READY splits calculation
     calculated_splits = []
     if data.total_amount_cents > 0:
         try:
@@ -182,16 +298,16 @@ async def create_expense(
     await db.flush()
 
     for s in calculated_splits:
-        split_record = ExpenseSplit(
-            expense_id=expense.id,
-            person_id=s.person_id,
-            assigned_amount_cents=s.assigned_amount_cents,
+        db.add(
+            ExpenseSplit(
+                expense_id=expense.id,
+                person_id=s.person_id,
+                assigned_amount_cents=s.assigned_amount_cents,
+            )
         )
-        db.add(split_record)
 
     await db.commit()
 
-    # Re-fetch with loaded splits
     refetch_stmt = (
         select(Expense)
         .where(Expense.id == expense.id)
@@ -217,7 +333,7 @@ async def update_expense(
     expense = (await db.execute(stmt)).scalar_one_or_none()
     if not expense:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Expense not found."
+            status_code=status.HTTP_404_NOT_FOUND, detail=EXPENSE_NOT_FOUND
         )
 
     cycle = await get_cycle_and_verify_access(
@@ -225,7 +341,6 @@ async def update_expense(
     )
     verify_cycle_is_open(cycle)
 
-    # Determine updated values
     new_title = data.title.strip() if data.title is not None else expense.title
     new_amount = (
         data.total_amount_cents
@@ -239,28 +354,8 @@ async def update_expense(
     new_due_date = data.due_date if data.due_date is not None else expense.due_date
     new_split_type = data.split_type or expense.split_type
 
-    # Validate that any provided participants belong to this household
-    all_target_ids: List[uuid.UUID] = []
-    if data.participant_ids:
-        all_target_ids.extend(data.participant_ids)
-    if data.percentages:
-        all_target_ids.extend(data.percentages.keys())
-    if data.exact_amounts:
-        all_target_ids.extend(data.exact_amounts.keys())
-    if data.weights:
-        all_target_ids.extend(data.weights.keys())
-
-    if all_target_ids:
-        p_stmt = select(Person).where(
-            Person.household_id == cycle.household_id,
-            Person.id.in_(all_target_ids),
-        )
-        household_persons = (await db.execute(p_stmt)).scalars().all()
-        if len(household_persons) != len(set(all_target_ids)):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="One or more specified participants do not belong to this household.",
-            )
+    all_target_ids = _extract_participant_ids(data)
+    await _verify_household_participants(db, cycle.household_id, all_target_ids)
 
     has_split_data = any(
         x is not None
@@ -280,54 +375,9 @@ async def update_expense(
     )
 
     if has_split_data or amount_changed or type_changed:
-        participant_ids = data.participant_ids
-        if participant_ids is None and not any(
-            (data.percentages, data.exact_amounts, data.weights)
-        ):
-            # Retain existing participants if split type is EQUAL
-            if new_split_type == "EQUAL":
-                participant_ids = [s.person_id for s in expense.splits]
-            elif new_split_type == "PERCENTAGE" and not data.percentages:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Updating amount or switching to PERCENTAGE split requires providing percentages.",
-                )
-            elif new_split_type == "EXACT" and not data.exact_amounts:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Updating amount or switching to EXACT split requires providing exact amounts.",
-                )
-            elif new_split_type == "WEIGHTED" and not data.weights:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Updating amount or switching to WEIGHTED split requires providing weights.",
-                )
-
-        try:
-            calculated_splits = calculate_splits(
-                total_amount_cents=new_amount,
-                split_type=new_split_type,
-                participant_ids=participant_ids,
-                percentages=data.percentages,
-                exact_amounts=data.exact_amounts,
-                weights=data.weights,
-            )
-        except SplitEngineError as e:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
-            )
-
-        # Remove existing splits
-        del_stmt = delete(ExpenseSplit).where(ExpenseSplit.expense_id == expense.id)
-        await db.execute(del_stmt)
-
-        for s in calculated_splits:
-            new_split = ExpenseSplit(
-                expense_id=expense.id,
-                person_id=s.person_id,
-                assigned_amount_cents=s.assigned_amount_cents,
-            )
-            db.add(new_split)
+        await _recalculate_and_apply_splits(
+            db, expense, new_amount, new_split_type, data
+        )
 
     expense.title = new_title
     expense.total_amount_cents = new_amount
@@ -340,7 +390,6 @@ async def update_expense(
 
     await db.commit()
 
-    # Re-fetch
     refetch_stmt = (
         select(Expense)
         .where(Expense.id == expense.id)
@@ -348,7 +397,6 @@ async def update_expense(
     )
     expense_loaded = (await db.execute(refetch_stmt)).scalar_one()
 
-    # Persons map
     p_stmt = select(Person).where(Person.household_id == cycle.household_id)
     persons = (await db.execute(p_stmt)).scalars().all()
     person_map = {p.id: p.name for p in persons}
@@ -371,7 +419,7 @@ async def set_expense_amount(
     expense = (await db.execute(stmt)).scalar_one_or_none()
     if not expense:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Expense not found."
+            status_code=status.HTTP_404_NOT_FOUND, detail=EXPENSE_NOT_FOUND
         )
 
     cycle = await get_cycle_and_verify_access(
@@ -379,7 +427,6 @@ async def set_expense_amount(
     )
     verify_cycle_is_open(cycle)
 
-    # If linked to a template and user requested updating the template baseline
     if expense.template_id and data.update_template_default:
         tpl_stmt = select(FixedExpenseTemplate).where(
             FixedExpenseTemplate.id == expense.template_id
@@ -388,42 +435,9 @@ async def set_expense_amount(
         if tpl:
             tpl.estimated_amount_cents = data.actual_amount_cents
 
-    # Determine split rules
-    participant_ids: Optional[List[uuid.UUID]] = None
-    percentages: Optional[Dict[uuid.UUID, float]] = None
-    weights: Optional[Dict[uuid.UUID, float]] = None
-    exact_amounts: Optional[Dict[uuid.UUID, int]] = None
-    split_type = expense.split_type
-
-    # 1. If template exists, prefer template rules
-    if expense.template:
-        split_type = expense.template.split_type or split_type
-        cfg = expense.template.split_config or {}
-        raw_pids = cfg.get("participant_ids")
-        if raw_pids:
-            participant_ids = [uuid.UUID(str(pid)) for pid in raw_pids]
-        if cfg.get("percentages"):
-            percentages = {
-                uuid.UUID(str(k)): float(v) for k, v in cfg["percentages"].items()
-            }
-        if cfg.get("weights"):
-            weights = {
-                uuid.UUID(str(k)): float(v) for k, v in cfg["weights"].items()
-            }
-
-    # 2. If no participant_ids yet, check existing splits
-    if not participant_ids and expense.splits:
-        participant_ids = [s.person_id for s in expense.splits]
-
-    # 3. Fallback: all active household persons
-    if not participant_ids and not percentages and not weights:
-        p_stmt = select(Person).where(
-            Person.household_id == cycle.household_id,
-            Person.is_active == True,
-            Person.is_deleted == False,
-        )
-        active_persons = (await db.execute(p_stmt)).scalars().all()
-        participant_ids = [p.id for p in active_persons]
+    split_type, participant_ids, percentages, weights = (
+        await _resolve_split_rule_participants(db, cycle, expense)
+    )
 
     try:
         calculated_splits = calculate_splits(
@@ -431,7 +445,7 @@ async def set_expense_amount(
             split_type=split_type,
             participant_ids=participant_ids,
             percentages=percentages,
-            exact_amounts=exact_amounts,
+            exact_amounts=None,
             weights=weights,
         )
     except SplitEngineError as e:
@@ -439,14 +453,27 @@ async def set_expense_amount(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
         )
 
-    # Clear existing splits and assign newly calculated splits using cascade
     expense.splits.clear()
     for s in calculated_splits:
-        new_split = ExpenseSplit(
-            person_id=s.person_id,
-            assigned_amount_cents=s.assigned_amount_cents,
+        expense.splits.append(
+            ExpenseSplit(
+                person_id=s.person_id,
+                assigned_amount_cents=s.assigned_amount_cents,
+            )
         )
-        expense.splits.append(new_split)
+
+    expense.total_amount_cents = data.actual_amount_cents
+    expense.status = "READY"
+    expense.split_type = split_type
+
+    await db.commit()
+    await db.refresh(expense, attribute_names=["splits"])
+
+    p_stmt = select(Person).where(Person.household_id == cycle.household_id)
+    persons = (await db.execute(p_stmt)).scalars().all()
+    person_map = {p.id: p.name for p in persons}
+
+    return format_expense_out(expense, person_map)
 
     expense.total_amount_cents = data.actual_amount_cents
     expense.status = "READY"
@@ -477,7 +504,7 @@ async def update_payment_status(
     expense = (await db.execute(stmt)).scalar_one_or_none()
     if not expense:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Expense not found."
+            status_code=status.HTTP_404_NOT_FOUND, detail=EXPENSE_NOT_FOUND
         )
 
     cycle = await get_cycle_and_verify_access(
@@ -505,7 +532,7 @@ async def delete_expense(
     expense = (await db.execute(stmt)).scalar_one_or_none()
     if not expense:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Expense not found."
+            status_code=status.HTTP_404_NOT_FOUND, detail=EXPENSE_NOT_FOUND
         )
 
     cycle = await get_cycle_and_verify_access(

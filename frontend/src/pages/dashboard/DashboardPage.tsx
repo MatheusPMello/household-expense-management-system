@@ -329,6 +329,142 @@ export const DashboardPage: React.FC = () => {
     );
   }
 
+  const renderHistoryContent = () => {
+    if (historyTab === 'payments') {
+      if (paymentsLoading) {
+        return <div className="text-center py-6 text-slate-400 text-xs">Loading payments...</div>;
+      }
+      if (residentPayments.length === 0) {
+        return (
+          <div className="text-center py-6 text-slate-400 text-xs">
+            No payments registered for this cycle.
+          </div>
+        );
+      }
+      return (
+        <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+          {residentPayments.map((p) => (
+            <div
+              key={p.id}
+              className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between"
+            >
+              <div>
+                <div className="flex items-center space-x-2">
+                  <span className="font-bold text-emerald-600 text-sm">
+                    {formatCentsToCurrency(p.amount_cents)}
+                  </span>
+                  <span className="text-xs text-slate-400">
+                    {formatDate(p.paid_at)}
+                  </span>
+                </div>
+                {p.notes && (
+                  <p className="text-xs text-slate-600 mt-0.5">{p.notes}</p>
+                )}
+              </div>
+              {activeCycle?.status === 'OPEN' && (
+                <div className="flex items-center space-x-1">
+                  <button
+                    onClick={() => {
+                      setEditingPayment(p);
+                      setEditPaymentAmountStr((p.amount_cents / 100).toFixed(2));
+                      setEditPaymentNotes(p.notes || '');
+                      setFormError('');
+                      setIsEditPaymentModalOpen(true);
+                    }}
+                    className="p-1.5 text-slate-500 hover:text-emerald-600 hover:bg-white rounded-md transition-colors border border-transparent hover:border-slate-200"
+                    title="Edit Payment"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                  </button>
+                  {activeHousehold.role === 'ADMIN' && (
+                    <button
+                      onClick={() => {
+                        setDeleteConfirm({
+                          type: 'payment',
+                          id: p.id,
+                          name: `${formatCentsToCurrency(p.amount_cents)} on ${formatDate(p.paid_at)}`,
+                        });
+                      }}
+                      className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-white rounded-md transition-colors border border-transparent hover:border-slate-200"
+                      title="Delete Payment"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    if (waiversLoading) {
+      return <div className="text-center py-6 text-slate-400 text-xs">Loading waivers...</div>;
+    }
+    if (residentWaivers.length === 0) {
+      return (
+        <div className="text-center py-6 text-slate-400 text-xs">
+          No debt waivers registered for this cycle.
+        </div>
+      );
+    }
+    return (
+      <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+        {residentWaivers.map((w) => (
+          <div
+            key={w.id}
+            className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between"
+          >
+            <div className="max-w-[75%]">
+              <div className="flex items-center space-x-2">
+                <span className="font-bold text-amber-600 text-sm">
+                  {formatCentsToCurrency(w.amount_cents)}
+                </span>
+                <span className="text-xs text-slate-400">
+                  {formatDate(w.waived_at)}
+                </span>
+              </div>
+              <p className="text-xs text-slate-700 mt-0.5 italic">
+                "{w.reason}"
+              </p>
+            </div>
+            {activeCycle?.status === 'OPEN' && activeHousehold.role === 'ADMIN' && (
+              <div className="flex items-center space-x-1">
+                <button
+                  onClick={() => {
+                    setEditingWaiver(w);
+                    setEditWaiverAmountStr((w.amount_cents / 100).toFixed(2));
+                    setEditWaiverReason(w.reason);
+                    setFormError('');
+                    setIsEditWaiverModalOpen(true);
+                  }}
+                  className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-white rounded-md transition-colors border border-transparent hover:border-slate-200"
+                  title="Edit Waiver"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => {
+                    setDeleteConfirm({
+                      type: 'waiver',
+                      id: w.id,
+                      name: `${formatCentsToCurrency(w.amount_cents)} ("${w.reason}")`,
+                    });
+                  }}
+                  className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-white rounded-md transition-colors border border-transparent hover:border-slate-200"
+                  title="Delete Waiver"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-8">
       {/* Top Header: Cycle Selector & Period Actions */}
@@ -408,7 +544,7 @@ export const DashboardPage: React.FC = () => {
         </div>
       </div>
 
-      {cycles.length === 0 ? (
+      {cycles.length === 0 && (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
           <Receipt className="w-12 h-12 text-slate-300 mx-auto mb-3" />
           <h3 className="text-lg font-semibold text-slate-800">
@@ -426,11 +562,15 @@ export const DashboardPage: React.FC = () => {
             </button>
           )}
         </div>
-      ) : reportLoading ? (
+      )}
+
+      {cycles.length > 0 && reportLoading && (
         <div className="flex justify-center py-16">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-600" />
         </div>
-      ) : report ? (
+      )}
+
+      {cycles.length > 0 && !reportLoading && report && (
         <>
           {/* Section 1: Summary Banner */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -759,7 +899,7 @@ export const DashboardPage: React.FC = () => {
             )}
           </div>
         </>
-      ) : null}
+      )}
 
       {/* Modal: Record Payment */}
       <Modal
@@ -1024,129 +1164,7 @@ export const DashboardPage: React.FC = () => {
             </div>
           )}
 
-          {historyTab === 'payments' ? (
-            paymentsLoading ? (
-              <div className="text-center py-6 text-slate-400 text-xs">Loading payments...</div>
-            ) : residentPayments.length === 0 ? (
-              <div className="text-center py-6 text-slate-400 text-xs">
-                No payments registered for this cycle.
-              </div>
-            ) : (
-              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                {residentPayments.map((p) => (
-                  <div
-                    key={p.id}
-                    className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between"
-                  >
-                    <div>
-                      <div className="flex items-center space-x-2">
-                        <span className="font-bold text-emerald-600 text-sm">
-                          {formatCentsToCurrency(p.amount_cents)}
-                        </span>
-                        <span className="text-xs text-slate-400">
-                          {formatDate(p.paid_at)}
-                        </span>
-                      </div>
-                      {p.notes && (
-                        <p className="text-xs text-slate-600 mt-0.5">{p.notes}</p>
-                      )}
-                    </div>
-                    {activeCycle?.status === 'OPEN' && (
-                      <div className="flex items-center space-x-1">
-                        <button
-                          onClick={() => {
-                            setEditingPayment(p);
-                            setEditPaymentAmountStr((p.amount_cents / 100).toFixed(2));
-                            setEditPaymentNotes(p.notes || '');
-                            setFormError('');
-                            setIsEditPaymentModalOpen(true);
-                          }}
-                          className="p-1.5 text-slate-500 hover:text-emerald-600 hover:bg-white rounded-md transition-colors border border-transparent hover:border-slate-200"
-                          title="Edit Payment"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
-                        {activeHousehold.role === 'ADMIN' && (
-                          <button
-                            onClick={() => {
-                              setDeleteConfirm({
-                                type: 'payment',
-                                id: p.id,
-                                name: `${formatCentsToCurrency(p.amount_cents)} on ${formatDate(p.paid_at)}`,
-                              });
-                            }}
-                            className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-white rounded-md transition-colors border border-transparent hover:border-slate-200"
-                            title="Delete Payment"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )
-          ) : waiversLoading ? (
-            <div className="text-center py-6 text-slate-400 text-xs">Loading waivers...</div>
-          ) : residentWaivers.length === 0 ? (
-            <div className="text-center py-6 text-slate-400 text-xs">
-              No debt waivers registered for this cycle.
-            </div>
-          ) : (
-            <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-              {residentWaivers.map((w) => (
-                <div
-                  key={w.id}
-                  className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between"
-                >
-                  <div className="max-w-[75%]">
-                    <div className="flex items-center space-x-2">
-                      <span className="font-bold text-amber-600 text-sm">
-                        {formatCentsToCurrency(w.amount_cents)}
-                      </span>
-                      <span className="text-xs text-slate-400">
-                        {formatDate(w.waived_at)}
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-700 mt-0.5 italic">
-                      "{w.reason}"
-                    </p>
-                  </div>
-                  {activeCycle?.status === 'OPEN' && activeHousehold.role === 'ADMIN' && (
-                    <div className="flex items-center space-x-1">
-                      <button
-                        onClick={() => {
-                          setEditingWaiver(w);
-                          setEditWaiverAmountStr((w.amount_cents / 100).toFixed(2));
-                          setEditWaiverReason(w.reason);
-                          setFormError('');
-                          setIsEditWaiverModalOpen(true);
-                        }}
-                        className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-white rounded-md transition-colors border border-transparent hover:border-slate-200"
-                        title="Edit Waiver"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => {
-                          setDeleteConfirm({
-                            type: 'waiver',
-                            id: w.id,
-                            name: `${formatCentsToCurrency(w.amount_cents)} ("${w.reason}")`,
-                          });
-                        }}
-                        className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-white rounded-md transition-colors border border-transparent hover:border-slate-200"
-                        title="Delete Waiver"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+          {renderHistoryContent()}
 
           <div className="flex justify-end pt-2 border-t border-slate-100">
             <button
@@ -1186,12 +1204,13 @@ export const DashboardPage: React.FC = () => {
           )}
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+            <label htmlFor="edit-payment-amount" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
               Payment Amount ($)
             </label>
             <div className="relative">
               <DollarSign className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
+                id="edit-payment-amount"
                 type="number"
                 step="0.01"
                 required
@@ -1204,10 +1223,11 @@ export const DashboardPage: React.FC = () => {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+            <label htmlFor="edit-payment-notes" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
               Notes (Optional)
             </label>
             <input
+              id="edit-payment-notes"
               type="text"
               value={editPaymentNotes}
               onChange={(e) => setEditPaymentNotes(e.target.value)}
@@ -1262,12 +1282,13 @@ export const DashboardPage: React.FC = () => {
           )}
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+            <label htmlFor="edit-waiver-amount" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
               Amount to Waive ($)
             </label>
             <div className="relative">
               <DollarSign className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
+                id="edit-waiver-amount"
                 type="number"
                 step="0.01"
                 required
@@ -1280,10 +1301,11 @@ export const DashboardPage: React.FC = () => {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+            <label htmlFor="edit-waiver-reason" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
               Mandatory Audit Reason
             </label>
             <textarea
+              id="edit-waiver-reason"
               required
               rows={3}
               value={editWaiverReason}
