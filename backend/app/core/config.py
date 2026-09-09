@@ -47,6 +47,34 @@ class Settings(BaseSettings):
                 v = v.replace("postgres://", "postgresql+asyncpg://", 1)
             elif v.startswith("postgresql://") and not v.startswith("postgresql+asyncpg://"):
                 v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+            # Adapt query parameters for asyncpg
+            if "postgresql+asyncpg://" in v:
+                from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+                parsed = urlparse(v)
+                query_params = parse_qs(parsed.query)
+
+                cleaned_params = {}
+                for key, val in query_params.items():
+                    if key == "sslmode":
+                        cleaned_params["ssl"] = val[0]
+                    elif key in ["channel_binding", "target_session_attrs"]:
+                        continue  # Drop libpq parameters not recognized by asyncpg
+                    else:
+                        cleaned_params[key] = val[0]
+
+                # Ensure SSL is active for cloud providers like Neon
+                if "neon.tech" in (parsed.hostname or "") and "ssl" not in cleaned_params:
+                    cleaned_params["ssl"] = "require"
+
+                v = urlunparse((
+                    parsed.scheme,
+                    parsed.netloc,
+                    parsed.path,
+                    parsed.params,
+                    urlencode(cleaned_params),
+                    parsed.fragment
+                ))
         return v
 
     @field_validator("BACKEND_CORS_ORIGINS")
