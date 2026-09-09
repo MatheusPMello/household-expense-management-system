@@ -45,6 +45,7 @@ jobs:
       - name: Run Automated Pytest Suite
         run: |
           pytest -v --cov=app --cov-report=term --cov-report=xml
+          sed -i 's|<source>.*app</source>|<source>backend/app</source>|g' coverage.xml
 
       - name: Upload Backend Coverage Report
         uses: actions/upload-artifact@v4
@@ -132,8 +133,12 @@ jobs:
           name: backend-coverage-report
           path: backend
 
+      - name: Normalize Coverage Report Path for SonarCloud
+        run: |
+          sed -i 's|<source>.*app</source>|<source>backend/app</source>|g' backend/coverage.xml
+
       - name: SonarCloud Scan
-        uses: SonarSource/sonarcloud-github-action@v3.1.0
+        uses: SonarSource/sonarqube-scan-action@v5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

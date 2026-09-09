@@ -1,3 +1,4 @@
 [run]
-concurrency = thread
+relative_files = True
+concurrency = thread,greenlet
 source = app
