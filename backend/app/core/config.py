@@ -32,6 +32,16 @@ class Settings(BaseSettings):
     @classmethod
     def assemble_db_connection(cls, v: Any) -> str:
         if isinstance(v, str):
+            v = v.strip()
+            if v.startswith("export "):
+                v = v[7:].strip()
+            if v.startswith("DATABASE_URL="):
+                v = v[13:].strip()
+            if v.startswith("psql "):
+                v = v[5:].strip()
+            if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+                v = v[1:-1].strip()
+
             # Automatically adapt postgres:// and postgresql:// to postgresql+asyncpg://
             if v.startswith("postgres://"):
                 v = v.replace("postgres://", "postgresql+asyncpg://", 1)
