@@ -1,5 +1,7 @@
+import json
 import os
-from typing import List
+from typing import Any, List, Union
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,12 +21,40 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite+aiosqlite:///./homeledger.db"
 
     # CORS
-    BACKEND_CORS_ORIGINS: List[str] = [
+    BACKEND_CORS_ORIGINS: Union[List[str], str] = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     ]
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def assemble_db_connection(cls, v: Any) -> str:
+        if isinstance(v, str):
+            # Automatically adapt postgres:// and postgresql:// to postgresql+asyncpg://
+            if v.startswith("postgres://"):
+                v = v.replace("postgres://", "postgresql+asyncpg://", 1)
+            elif v.startswith("postgresql://") and not v.startswith("postgresql+asyncpg://"):
+                v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
+
+    @field_validator("BACKEND_CORS_ORIGINS")
+    @classmethod
+    def assemble_cors_origins(cls, v: Any) -> List[str]:
+        if isinstance(v, str):
+            v_stripped = v.strip()
+            if v_stripped.startswith("[") and v_stripped.endswith("]"):
+                try:
+                    parsed = json.loads(v_stripped)
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed if item]
+                except Exception:
+                    pass
+            return [item.strip() for item in v.split(",") if item.strip()]
+        elif isinstance(v, (list, tuple, set)):
+            return [str(item).strip() for item in v if item]
+        return v
 
     model_config = SettingsConfigDict(
         env_file=".env",
